@@ -44,3 +44,41 @@ def get_pipeline() -> IngestionPipeline:
         indexer=get_indexer(),
         auto_create_index=False,
     )
+
+
+@lru_cache(maxsize=1)
+def get_reranker():
+    """Provides Bedrock Cohere reranker instance with fallback to NoOp."""
+    from src.retrieval.reranker import BedrockCohereReranker, NoOpReranker
+    try:
+        return BedrockCohereReranker()
+    except Exception:
+        return NoOpReranker()
+
+
+@lru_cache(maxsize=1)
+def get_hybrid_retriever():
+    """Provides OpenSearchHybridRetriever singleton instance."""
+    from src.retrieval.retriever import OpenSearchHybridRetriever
+    indexer = get_indexer()
+    client = getattr(indexer, "client", None)
+    return OpenSearchHybridRetriever(
+        client=client,
+        embedder=get_embedder(),
+        reranker=get_reranker(),
+    )
+
+
+def get_retrieval_service():
+    """Provides RetrievalService instance."""
+    from src.retrieval.service import RetrievalService
+    return RetrievalService(retriever=get_hybrid_retriever())
+
+
+@lru_cache(maxsize=1)
+def get_generation_service():
+    """Provides GenerationService singleton instance."""
+    from src.generation.service import GenerationService
+    return GenerationService.from_config(get_app_settings())
+
+

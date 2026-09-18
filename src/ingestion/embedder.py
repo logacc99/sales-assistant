@@ -67,12 +67,16 @@ class BedrockEmbedder(BaseEmbedder):
         max_workers: Optional[int] = None,
         client: Optional[Any] = None,
         region_name: Optional[str] = None,
+        default_input_type: str = "search_document",
+        input_type: Optional[str] = None,
     ) -> None:
         cfg = get_config()
         self.model_id = model_id or cfg.bedrock_model_id
         self.dimension = dimension or cfg.bedrock_dimension
         self.max_workers = max_workers or cfg.bedrock_max_workers
         self.region_name = region_name or cfg.aws_region
+        self.default_input_type = input_type or default_input_type
+
 
         if client is not None:
             self.client = client
@@ -93,16 +97,18 @@ class BedrockEmbedder(BaseEmbedder):
         retry=retry_if_exception(_is_throttling_error),
         reraise=True,
     )
-    def embed_text(self, text: str, input_type: str = "search_document") -> list[float]:
+    def embed_text(self, text: str, input_type: Optional[str] = None) -> list[float]:
         """Generates embedding vector for a single text string with exponential backoff."""
         clean_text = text.strip()
         if not clean_text:
             clean_text = "empty"
 
+        target_input_type = input_type or getattr(self, "default_input_type", "search_document")
+
         if "cohere" in self.model_id.lower():
             payload = {
                 "texts": [clean_text],
-                "input_type": input_type,
+                "input_type": target_input_type,
                 "truncate": "END",
             }
             body_bytes = json.dumps(payload).encode("utf-8")

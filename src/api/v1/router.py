@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from src.api.v1.endpoints import crawler, ingestion
+from src.api.v1.endpoints import crawler, generation, ingestion, retrieval
 
 api_v1_router = APIRouter()
 
@@ -17,3 +17,17 @@ api_v1_router.include_router(
     prefix="/ingestion",
     tags=["Ingestion & Indexing"],
 )
+
+api_v1_router.include_router(
+    retrieval.router,
+    prefix="/retrieval",
+    tags=["Hybrid Retrieval"],
+)
+
+api_v1_router.include_router(
+    generation.router,
+    prefix="/generate",
+    tags=["LLM Generation"],
+)
+
+

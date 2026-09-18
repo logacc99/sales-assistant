@@ -66,7 +66,8 @@ The system strictly adheres to **Spec-Driven Development (SDD)**. Low-level tech
 | **`SPEC-0000`** | **Overall System & Server Runtime** | [`specs/00-system-spec.md`](specs/00-system-spec.md) | High-level topology, runtime CLI entrypoint (`main.py`), pre-flight diagnostics, subsystem boundaries, and cross-cutting SLAs. |
 | **`SPEC-0001`** | **Assistant Orchestration** | [`specs/01-ecommerce-assistant-spec.md`](specs/01-ecommerce-assistant-spec.md) | LangGraph StateGraph, shopper context, promotion evaluation rules, live stock verification hooks, and UI citations. |
 | **`SPEC-0002`** | **Ingestion & Indexing** | [`specs/02-ingestion-indexing-pipeline-spec.md`](specs/02-ingestion-indexing-pipeline-spec.md) | Crawl4AI crawling, markdown chunking, Bedrock Cohere v3 embeddings, OpenSearch k-NN lucene schema, Change Data Detection (CDC), and REST API. |
-| **`SPEC-0003`** | **Retrieval & Re-ranking** | [`specs/03-hybrid-retrieval-reranking-spec.md`](specs/03-hybrid-retrieval-reranking-spec.md) *(Draft)* | Hybrid fusion (BM25 + Dense k-NN), cross-encoder re-ranking, and dynamic score thresholding. |
+| **`SPEC-0003`** | **Retrieval & Re-ranking** | [`specs/03-hybrid-retrieval-reranking-spec.md`](specs/03-hybrid-retrieval-reranking-spec.md) *(Approved)* | Hybrid fusion (BM25 + Dense k-NN via OpenSearch `_msearch` + client-side RRF), Bedrock Cohere re-ranking, and parent-child policy expansion. |
+| **`SPEC-0004`** | **Bedrock LLM Generation** | [`specs/04-llm-response-generation-spec.md`](specs/04-llm-response-generation-spec.md) *(Draft)* | Grounded prompt synthesis using AWS Bedrock Converse API, context token budgeting, structured UI citation cards, and polite refusal policies. |
 
 ---
 

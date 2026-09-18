@@ -41,12 +41,15 @@ def run_preflight_and_test() -> None:
     print("STEP 3: Testing OpenSearch Cluster & Index")
     print("=" * 60)
     indexer = OpenSearchVectorIndexer()
-    try:
-        info = indexer.client.info()
-        print(f"SUCCESS: Connected to OpenSearch cluster version {info.get('version', {}).get('number')}")
-    except Exception as e:
-        print(f"FAILURE connecting to OpenSearch: {e}")
-        return
+    if cfg.opensearch_is_serverless:
+        print(f"OpenSearch Serverless (AOSS) mode detected: {indexer.host}:{indexer.port}")
+    else:
+        try:
+            info = indexer.client.info()
+            print(f"SUCCESS: Connected to OpenSearch cluster version {info.get('version', {}).get('number')}")
+        except Exception as e:
+            print(f"FAILURE connecting to OpenSearch: {e}")
+            return
 
     test_index = cfg.opensearch_index_name
     print(f"Ensuring test index '{test_index}' exists...")

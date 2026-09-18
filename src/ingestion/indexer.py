@@ -106,11 +106,18 @@ class OpenSearchVectorIndexer(BaseVectorIndexer):
                 session = boto3.Session(**session_kwargs)
                 credentials = session.get_credentials()
 
+                service = cfg.opensearch_service_name
+                if ".aoss.amazonaws.com" in clean_host or cfg.opensearch_is_serverless:
+                    service = "aoss"
+                    use_ssl = True
+                    if port == 9200:
+                        port = 443
+
                 if credentials:
                     try:
                         from opensearchpy import AWSV4SignerAuth, RequestsHttpConnection
 
-                        http_auth = AWSV4SignerAuth(credentials, cfg.aws_region, "es")
+                        http_auth = AWSV4SignerAuth(credentials, cfg.aws_region, service)
                         connection_class = RequestsHttpConnection
                     except ImportError:
                         from requests_aws4auth import AWS4Auth
@@ -121,7 +128,7 @@ class OpenSearchVectorIndexer(BaseVectorIndexer):
                             frozen_creds.access_key,
                             frozen_creds.secret_key,
                             cfg.aws_region,
-                            "es",
+                            service,
                             session_token=frozen_creds.token,
                         )
                         connection_class = RequestsHttpConnection
@@ -135,7 +142,7 @@ class OpenSearchVectorIndexer(BaseVectorIndexer):
             "hosts": [{"host": clean_host, "port": port}],
             "http_auth": http_auth,
             "use_ssl": use_ssl,
-            "verify_certs": False,
+            "verify_certs": use_ssl,
             "ssl_show_warn": False,
         }
         if connection_class is not None:
@@ -360,7 +367,11 @@ class OpenSearchVectorIndexer(BaseVectorIndexer):
     def purge_stale_documents(
         self, index_name: str, active_doc_ids: list[str], source_prefix: Optional[str] = None
     ) -> int:
-        """Deletes indexed documents under source_prefix whose IDs are absent from active_doc_ids."""
+        """Deletes indexed documents under source_prefix whose IDs are absent from active_doc_ids.
+        
+        Compatible with OpenSearch Serverless (which does not support _delete_by_query)
+        by using a search point-lookup followed by helpers.bulk deletion.
+        """
         try:
             if not self.client.indices.exists(index=index_name):
                 return 0
@@ -379,29 +390,54 @@ class OpenSearchVectorIndexer(BaseVectorIndexer):
                     "must": must_filters,
                     "must_not": must_not_filters,
                 }
-            }
+            },
+            "_source": False,
+            "size": 1000,
         }
 
-        response = self.client.delete_by_query(
-            index=index_name,
-            body=query,
-            refresh=True,
-            wait_for_completion=True,
-        )
+        try:
+            search_res = self.client.search(index=index_name, body=query)
+            hits = search_res.get("hits", {}).get("hits", [])
+            stale_ids = [hit["_id"] for hit in hits if "_id" in hit]
+            if not stale_ids:
+                return 0
 
-        deleted = response.get("deleted", 0)
-        logger.info(f"Purged {deleted} stale documents from index '{index_name}'.")
-        return deleted
+            delete_actions = [
+                {
+                    "_op_type": "delete",
+                    "_index": index_name,
+                    "_id": sid,
+                }
+                for sid in stale_ids
+            ]
+            success_count, errors = helpers.bulk(
+                self.client,
+                delete_actions,
+                raise_on_error=False,
+                refresh=True,
+            )
+            logger.info(f"Purged {success_count} stale documents from index '{index_name}'.")
+            return success_count
+        except Exception as e:
+            logger.warning(f"Error purging stale documents from index '{index_name}': {e}")
+            return 0
 
     def as_langchain_vectorstore(self, index_name: str, embedding_function: Optional[Any] = None) -> Any:
         """Returns a configured langchain_community.vectorstores.OpenSearchVectorSearch instance."""
         from langchain_community.vectorstores import OpenSearchVectorSearch
 
+        cfg = get_config()
+        use_ssl = "https" in self.host or self.port == 443
+        scheme = "https" if use_ssl else "http"
+        clean_host = self.host.replace("https://", "").replace("http://", "").rstrip("/")
+        is_aoss = cfg.opensearch_is_serverless or ".aoss.amazonaws.com" in clean_host
+
         return OpenSearchVectorSearch(
-            opensearch_url=f"http://{self.host}:{self.port}",
+            opensearch_url=f"{scheme}://{clean_host}:{self.port}",
             index_name=index_name,
             embedding_function=embedding_function,
             http_auth=self.client.transport.hosts[0].get("http_auth") if hasattr(self.client, "transport") else None,
-            use_ssl="https" in self.host or self.port == 443,
-            verify_certs=False,
+            use_ssl=use_ssl,
+            verify_certs=use_ssl,
+            is_aoss=is_aoss,
         )

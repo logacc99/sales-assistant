@@ -1,18 +1,19 @@
-# Ingestion & OpenSearch Vector Indexing Pipeline Specification
+# Ingestion & OpenSearch Serverless Vector Indexing Pipeline Specification
 
 **Spec ID**: `SPEC-0002`  
 **Status**: `Approved`  
 **Author**: Antigravity & User  
-**Date**: 2026-09-15  
+**Date**: 2026-09-18 (Updated from OpenSearch Domain to OpenSearch Serverless)  
 **Parent Spec**: [`specs/01-ecommerce-assistant-spec.md`](file:///home/ngthuan/projects/sales-assistant/specs/01-ecommerce-assistant-spec.md)
 
 ---
 
 ## 1. Problem Statement & Motivation
 
-- **Context**: The Sales Assistant project crawls raw e-commerce web pages (such as `bepbbq.com`) into Markdown files with YAML frontmatter via `Crawl4AI` (`src/ingestion/crawler.py`). However, raw crawled pages contain substantial web boilerplate (menus, sidebars, navigation bars, cart links) alongside actual product cards, promotions, and return/warranty policies. Before vector retrieval can function, we need a robust, automated pipeline to ingest raw crawled Markdown, clean and chunk the semantic content, classify chunks into standardized domain categories (`product`, `promotion`, `policy`), generate dense vector embeddings via AWS Bedrock, and bulk-index them into an Amazon OpenSearch Service k-NN index.
-- **User Story**: As a backend developer and test engineer, I want both a modular Python module API (`crawled data -> chunking -> embedding -> OpenSearch bulk index`) and a comprehensive, modular REST API (`src/api/v1/endpoints/ingestion.py` and `crawler.py`) equipped with Change Data Detection (CDC), stale document reconciliation, Vietnamese text analysis, and dual lexical/vector indexing, so that I can programmatically trigger fast, cost-efficient data ingestion, interact with the backend, and self-test each stage (crawling, chunk inspection, embedding, indexing, CDC, and search) quickly via OpenAPI/Swagger UI.
+- **Context**: The Sales Assistant project crawls raw e-commerce web pages (such as `bepbbq.com`) into Markdown files with YAML frontmatter via `Crawl4AI` (`src/ingestion/crawler.py`). However, raw crawled pages contain substantial web boilerplate (menus, sidebars, navigation bars, cart links) alongside actual product cards, promotions, and return/warranty policies. Before vector retrieval can function, we need a robust, automated pipeline to ingest raw crawled Markdown, clean and chunk the semantic content, classify chunks into standardized domain categories (`product`, `promotion`, `policy`), generate dense vector embeddings via AWS Bedrock, and bulk-index them into an **Amazon OpenSearch Serverless (AOSS)** collection (`VECTORSEARCH` type). Switching from a provisioned OpenSearch domain to OpenSearch Serverless eliminates the operational overhead of cluster provisioning, master/data node sizing, and manual shard/replica management, providing elastic compute scaling (OCUs) and pay-per-use efficiency.
+- **User Story**: As a backend developer and test engineer, I want both a modular Python module API (`crawled data -> chunking -> embedding -> OpenSearch Serverless bulk index`) and a comprehensive, modular REST API (`src/api/v1/endpoints/ingestion.py` and `crawler.py`) equipped with Change Data Detection (CDC), serverless-compatible stale document reconciliation (via search + bulk delete), Vietnamese text analysis, and dual lexical/vector indexing, so that I can programmatically trigger fast, cost-efficient data ingestion, interact with the backend, and self-test each stage (crawling, chunk inspection, embedding, indexing, CDC, and search) quickly via OpenAPI/Swagger UI.
 - **Non-Goals / Out of Scope**:
+  - Provisioning or managing self-hosted/dedicated OpenSearch cluster nodes, shards, or master instances (fully handled by AWS OpenSearch Serverless).
   - Online conversational agent / multi-turn chat generation (governed by `specs/01-ecommerce-assistant-spec.md`).
   - Production frontend UI / consumer web application (this spec focuses on BE module APIs and developer self-test REST endpoints).
   - Real-time stock verification hook at query time (handled downstream by `LiveInventoryService`).
@@ -129,16 +130,16 @@ graph TD
     F --> G[Enrich Small Chunk + Parent Section Context]
     G --> H[Typed EcomChunk list with content_hash]
     H --> I[Change Data Detector - CDC]
-    I -->|Query Existing Hashes in OpenSearch| J{Content Hash Changed?}
+    I -->|Query Existing Hashes in AOSS| J{Content Hash Changed?}
     J -->|Unchanged: Skip Embedding| K[Bypass Bedrock - 0 API Cost]
     J -->|New / Modified| L[BedrockThreadedEmbedder: Titan v2 or Cohere v3]
     L -->|ThreadPoolExecutor + Tenacity Backoff| M[Embedded EcomChunk list]
     M --> N[OpenSearchVectorIndexer]
-    N -->|Dual Auth: AWS SigV4 / Basic Auth| O[(Amazon OpenSearch Dual Store)]
+    N -->|AWS SigV4 service: aoss / Dev Fallback| O[(Amazon OpenSearch Serverless Collection: VECTORSEARCH)]
     N -->|Batch Post-Sync| R[Stale Document Reconciler - Orphan Sweep]
-    R -->|Delete Discontinued / Unmatched Doc IDs| O
-    subgraph OpenSearch Index
-        O --> P[Dense Vector Index: HNSW k-NN 1024-d]
+    R -->|Search Stale Doc IDs + Bulk Delete| O
+    subgraph AOSS Collection Index
+        O --> P[Dense Vector Index: HNSW k-NN 1024-d Lucene]
         O --> Q[Lexical Keyword Index: BM25 Text with Accent-Folding & Exact SKU]
     end
 ```
@@ -176,93 +177,108 @@ graph TD
    - Each chunk computes `content_hash = sha256(content.encode()).hexdigest()`.
    - **CDC Query Pattern**: Before requesting Bedrock embeddings, the pipeline queries OpenSearch via **Batch `_mget` by document ID** (`_source: ["content_hash", "doc_id"]`) in batches of up to 500 IDs. This provides deterministic, point-lookup latency without query scoring overhead.
    - If an existing indexed document has an identical `content_hash`, embedding generation and indexing are skipped. This eliminates redundant AWS Bedrock API charges and slashes recurring ingestion runtimes by up to 95%.
-   - **Stale Document Reconciliation (Explicit Orphan Sweep)**: To prevent accidental deletions during partial crawl runs or network timeouts, orphan reconciliation operates via **explicit manual invocation** (`pipeline.reconcile_orphans(...)` or CLI flag `--purge-orphans`). When executed, it compares active `doc_id`s against indexed records under the target domain/source prefix and executes a scoped `_delete_by_query` purge.
+   - **Stale Document Reconciliation (Explicit Orphan Sweep - AOSS Safe)**: To prevent accidental deletions during partial crawl runs or network timeouts, orphan reconciliation operates via **explicit manual invocation** (`pipeline.reconcile_orphans(...)` or CLI flag `--purge-orphans`). Because OpenSearch Serverless (AOSS) **does not support the `_delete_by_query` API**, reconciliation executes a serverless-safe two-stage orphan purge:
+      1. Dispatches an OpenSearch `search` query with `_source: false` to retrieve `_id` values under the target domain/source prefix whose IDs are absent from `active_doc_ids`.
+      2. Dispatches bulk deletions using `opensearchpy.helpers.bulk` with `{"_op_type": "delete", "_index": index_name, "_id": doc_id}`. This provides 100% compatibility across both OpenSearch Serverless collections and provisioned clusters without invoking unsupported APIs.
 6. **Bedrock Embedding Concurrency, Resilience & Multilingual Models**:
-   - **Active Default Model**: `cohere.embed-multilingual-v3.0` (1024-dimensional normalized vectors; native state-of-the-art representation for Vietnamese compound terms; uses `input_type="search_document"` for indexing and `input_type="search_query"` for retrieval).
-   - **Configurable Alternative**: `amazon.titan-embed-text-v2:0` (1024-dimensional normalized vectors, general purpose cost-effective alternative).
-   - **Concurrency**: `ThreadPoolExecutor` with 5–8 concurrent worker threads.
-   - **Resilience**: `tenacity` exponential backoff with jitter on `botocore.exceptions.ClientError` with error code `ThrottlingException` or `RequestLimitExceeded`.
-7. **Hybrid-Ready OpenSearch Index Schema (BM25 + Dense k-NN + Vietnamese Analysis)**:
-   - **Dual Search Architecture**:
-     - `embedding` (`knn_vector`, 1024-d, `lucene` HNSW cosine): native OpenSearch 2.x engine supporting efficient metadata pre-filtering and memory efficiency.
-     - `content` (`text` with multi-field `folded`): standard tokenizer plus `vietnamese_ascii_analyzer` (lowercase + `asciifolding`) to match shopper queries typed without tone marks (e.g. `bep nuong` matching `bếp nướng`).
-     - `metadata.product_id` and `metadata.sku` (`keyword`): enables exact-match lexical lookups.
-   - **Flexible Dual Auth**:
-     - Defaults to AWS SigV4 via `requests_aws4auth.AWS4Auth` / `boto3.Session`.
-     - Supports fallback to Basic Auth (`OPENSEARCH_USERNAME` / `OPENSEARCH_PASSWORD`) or no-auth when `OPENSEARCH_USE_AWS_AUTH=false` for local Docker or CI test environments.
-   - **Index Settings & k-NN Mapping**:
-     ```json
-     {
-       "settings": {
-         "index": {
-           "knn": true,
-           "knn.algo_param.ef_search": 100
-         },
-         "analysis": {
-           "analyzer": {
-             "vietnamese_ascii_analyzer": {
-               "tokenizer": "standard",
-               "filter": ["lowercase", "asciifolding"]
-             }
-           }
-         }
-       },
-       "mappings": {
-         "properties": {
-           "doc_id": { "type": "keyword" },
-           "chunk_id": { "type": "keyword" },
-           "content_hash": { "type": "keyword" },
-           "category": { "type": "keyword" },
-           "content": {
-             "type": "text",
-             "fields": {
-               "folded": {
-                 "type": "text",
-                 "analyzer": "vietnamese_ascii_analyzer"
-               }
-             }
-           },
-           "embedding": {
-             "type": "knn_vector",
-             "dimension": 1024,
-             "method": {
-               "name": "hnsw",
-               "space_type": "cosinesimil",
-               "engine": "lucene"
-             }
-           },
-           "metadata": {
-             "type": "object",
-             "properties": {
-               "source_url": { "type": "keyword" },
-               "source_file": { "type": "keyword" },
-               "crawl_timestamp": { "type": "date" },
-               "product_id": { "type": "keyword" },
-               "product_name": {
-                 "type": "text",
-                 "fields": {
-                   "folded": {
-                     "type": "text",
-                     "analyzer": "vietnamese_ascii_analyzer"
-                   }
-                 }
-               },
-               "price": { "type": "double" },
-               "currency": { "type": "keyword" },
-               "stock_status": { "type": "keyword" },
-               "policy_type": { "type": "keyword" },
-               "parent_section_content": { "type": "text", "index": false },
-               "promo_code": { "type": "keyword" }
-             }
-           }
-         }
-       }
-     }
-     ```
+    - **Active Default Model**: `cohere.embed-multilingual-v3.0` (1024-dimensional normalized vectors; native state-of-the-art representation for Vietnamese compound terms; uses `input_type="search_document"` for indexing and `input_type="search_query"` for retrieval).
+    - **Configurable Alternative**: `amazon.titan-embed-text-v2:0` (1024-dimensional normalized vectors, general purpose cost-effective alternative).
+    - **Concurrency**: `ThreadPoolExecutor` with 5–8 concurrent worker threads.
+    - **Resilience**: `tenacity` exponential backoff with jitter on `botocore.exceptions.ClientError` with error code `ThrottlingException` or `RequestLimitExceeded`.
+7. **Hybrid-Ready OpenSearch Serverless Index Schema (BM25 + Dense k-NN + Vietnamese Analysis)**:
+    - **OpenSearch Serverless Collection Type**:
+      - Must use collection type **`VECTORSEARCH`**. The alternative `SEARCH` collection type does NOT support `knn_vector` indexes.
+      - AOSS automatically manages index sharding, partition scaling, and compute via OpenSearch Compute Units (OCUs).
+      - **Index Settings Restrictions**: Setting `index.number_of_shards` or `index.number_of_replicas` is **strictly prohibited and rejected** by OpenSearch Serverless. The index settings payload must only define `index.knn: true` and custom analyzers.
+    - **AOSS Security Policy Prerequisites**:
+      Before creating indexes or inserting documents, an AOSS collection requires three decoupled AWS policies:
+      1. *Encryption Policy*: KMS key or AWS-owned key defining collection encryption.
+      2. *Network Policy*: Controls VPC or public Internet endpoint access to the collection.
+      3. *Data Access Policy*: Explicitly grants IAM principals permissions for data and index operations (`aoss:CreateCollectionItems`, `aoss:DeleteCollectionItems`, `aoss:UpdateCollectionItems`, `aoss:DescribeCollectionItems`, `aoss:CreateIndex`, `aoss:DeleteIndex`, `aoss:UpdateIndex`, `aoss:DescribeIndex`).
+    - **Dual Search Architecture**:
+      - `embedding` (`knn_vector`, 1024-d, `lucene` HNSW cosine): native OpenSearch 2.x engine supporting efficient metadata pre-filtering and memory efficiency.
+      - `content` (`text` with multi-field `folded`): standard tokenizer plus `vietnamese_ascii_analyzer` (lowercase + `asciifolding`) to match shopper queries typed without tone marks (e.g. `bep nuong` matching `bếp nướng`).
+      - `metadata.product_id` and `metadata.sku` (`keyword`): enables exact-match lexical lookups.
+    - **AWS SigV4 Authentication for AOSS**:
+      - AWS SigV4 signing service **must be `"aoss"`** (using `"es"` produces HTTP 403 Forbidden on AOSS endpoints).
+      - Uses `opensearchpy.AWSV4SignerAuth(credentials, region, service="aoss")` with `RequestsHttpConnection`.
+      - Connection URL targets HTTPS port 443 (e.g. `https://<collection-id>.<region>.aoss.amazonaws.com:443`).
+      - Supports config-driven fallback to Basic Auth (`OPENSEARCH_USERNAME` / `OPENSEARCH_PASSWORD`) or no-auth when `OPENSEARCH_USE_AWS_AUTH=false` for local Docker or CI test environments.
+    - **LangChain Integration**:
+      - `OpenSearchVectorSearch` instance initialized with `is_aoss=True` to adapt query formulation and bypass unsupported cluster-level APIs.
+    - **Index Settings & k-NN Mapping Payload**:
+      ```json
+      {
+        "settings": {
+          "index": {
+            "knn": true,
+            "knn.algo_param.ef_search": 100
+          },
+          "analysis": {
+            "analyzer": {
+              "vietnamese_ascii_analyzer": {
+                "tokenizer": "standard",
+                "filter": ["lowercase", "asciifolding"]
+              }
+            }
+          }
+        },
+        "mappings": {
+          "properties": {
+            "doc_id": { "type": "keyword" },
+            "chunk_id": { "type": "keyword" },
+            "content_hash": { "type": "keyword" },
+            "category": { "type": "keyword" },
+            "content": {
+              "type": "text",
+              "fields": {
+                "folded": {
+                  "type": "text",
+                  "analyzer": "vietnamese_ascii_analyzer"
+                }
+              }
+            },
+            "embedding": {
+              "type": "knn_vector",
+              "dimension": 1024,
+              "method": {
+                "name": "hnsw",
+                "space_type": "cosinesimil",
+                "engine": "lucene"
+              }
+            },
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "source_url": { "type": "keyword" },
+                "source_file": { "type": "keyword" },
+                "crawl_timestamp": { "type": "date" },
+                "product_id": { "type": "keyword" },
+                "product_name": {
+                  "type": "text",
+                  "fields": {
+                    "folded": {
+                      "type": "text",
+                      "analyzer": "vietnamese_ascii_analyzer"
+                    }
+                  }
+                },
+                "price": { "type": "double" },
+                "currency": { "type": "keyword" },
+                "stock_status": { "type": "keyword" },
+                "policy_type": { "type": "keyword" },
+                "parent_section_content": { "type": "text", "index": false },
+                "promo_code": { "type": "keyword" }
+              }
+            }
+          }
+        }
+      }
+      ```
 
 ### 2.4 Environment Variables & Dynamic Configuration
 
-All dynamic variables, AWS credentials, embedding parameters, and OpenSearch connection settings must be loaded from an environment file (`.env` with template in `.env.example`) or the process environment. Hardcoding credentials, model IDs, or dimensions in source code is strictly prohibited.
+All dynamic variables, AWS credentials, embedding parameters, and OpenSearch Serverless connection settings must be loaded from an environment file (`.env` with template in `.env.example`) or the process environment. Hardcoding credentials, model IDs, or dimensions in source code is strictly prohibited.
 
 | Variable Name | Type | Default Value | Description |
 | :--- | :--- | :--- | :--- |
@@ -273,10 +289,13 @@ All dynamic variables, AWS credentials, embedding parameters, and OpenSearch con
 | `AWS_ACCESS_KEY_ID` | `str` | `None` | Optional AWS access key (falls back to boto3 default credentials chain / IAM role) |
 | `AWS_SECRET_ACCESS_KEY` | `str` | `None` | Optional AWS secret key |
 | `AWS_SESSION_TOKEN` | `str` | `None` | Optional AWS session token for temporary credentials |
-| `OPENSEARCH_HOST` | `str` | `localhost` | OpenSearch endpoint hostname or domain URL |
-| `OPENSEARCH_PORT` | `int` | `9200` | OpenSearch port |
-| `OPENSEARCH_INDEX_NAME` | `str` | `sales-assistant-catalog` | Target OpenSearch k-NN index name |
-| `OPENSEARCH_USE_AWS_AUTH` | `bool` | `true` | When `true`, signs requests with AWS SigV4; when `false`, allows Basic Auth / no-auth |
+| `OPENSEARCH_HOST` | `str` | `localhost` | OpenSearch Serverless collection endpoint (e.g. `<collection-id>.<region>.aoss.amazonaws.com`) or hostname |
+| `OPENSEARCH_PORT` | `int` | `443` | OpenSearch port (`443` for AOSS HTTPS; `9200` for local Docker dev) |
+| `OPENSEARCH_INDEX_NAME` | `str` | `sales-assistant-catalog` | Target OpenSearch k-NN index name within collection |
+| `OPENSEARCH_IS_SERVERLESS` | `bool` | `true` | When `true`, enables AOSS behaviors (service name `aoss`, omits shard settings, LangChain `is_aoss=True`) |
+| `OPENSEARCH_SERVICE_NAME` | `str` | `aoss` | AWS SigV4 signing service (`aoss` for Serverless collections, `es` for provisioned domains) |
+| `OPENSEARCH_COLLECTION_TYPE` | `str` | `VECTORSEARCH` | Target OpenSearch Serverless collection type (must be `VECTORSEARCH` for k-NN) |
+| `OPENSEARCH_USE_AWS_AUTH` | `bool` | `true` | When `true`, signs requests with AWS SigV4; when `false`, allows Basic Auth / no-auth for local dev |
 | `OPENSEARCH_USERNAME` | `str` | `admin` | Username for OpenSearch Basic Auth (when `OPENSEARCH_USE_AWS_AUTH=false`) |
 | `OPENSEARCH_PASSWORD` | `str` | `admin` | Password for OpenSearch Basic Auth (when `OPENSEARCH_USE_AWS_AUTH=false`) |
 
@@ -551,7 +570,10 @@ class ErrorResponse(BaseModel):
       "doc_count": 142,
       "dimension": 1024,
       "knn_engine": "lucene",
-      "vietnamese_analyzer_configured": true
+      "vietnamese_analyzer_configured": true,
+      "is_serverless": true,
+      "collection_type": "VECTORSEARCH",
+      "auth_mode": "aws_sigv4"
     }
   }
   ```
@@ -723,10 +745,14 @@ class ErrorResponse(BaseModel):
    - Use `opensearchpy.helpers.bulk` with `raise_on_error=False`, logging failed document IDs and reasons in the summary output.
 6. **Idempotency & Deduplication**:
    - Deterministic chunk ID: `id = hashlib.sha256(f"{source_url}#{chunk_index}".encode()).hexdigest()`. Re-running ingestion over identical files safely updates/replaces records without creating duplicate vectors.
-7. **Stale & Discontinued Product Removal (Orphan Sweeps)**:
-   - When products are discontinued, deleted from the store, or promotions expire, CDC alone cannot detect their deletion. `IngestionPipeline.reconcile_orphans()` matches active batch `doc_id`s against OpenSearch index records for the given domain/source and executes a scoped deletion so outdated items never surface in retrieval.
+7. **Stale & Discontinued Product Removal (Orphan Sweeps in Serverless)**:
+   - When products are discontinued, deleted from the store, or promotions expire, CDC alone cannot detect their deletion. `IngestionPipeline.reconcile_orphans()` matches active batch `doc_id`s against OpenSearch index records for the given domain/source. Because OpenSearch Serverless **does not support `_delete_by_query`**, the pipeline queries candidate stale document IDs (`search` with `_source: false`) and executes batch deletions using `opensearchpy.helpers.bulk` (`_op_type: "delete"`), ensuring safe, full-fidelity orphan cleanup across both Serverless and provisioned targets.
 8. **Vietnamese Diacritic & Tone Mark Search Resiliency**:
    - Shoppers frequently search without Vietnamese accent marks (e.g. `bep nuong gas` vs `bếp nướng gas`). OpenSearch index mapping equips `content` and `product_name` with `folded` subfields (`vietnamese_ascii_analyzer`), allowing hybrid BM25 search to seamlessly match both accented and non-accented user queries.
+9. **OpenSearch Serverless Diagnostic Checks & Ping Resilience**:
+   - Unlike provisioned clusters, OpenSearch Serverless does not support cluster-level APIs (e.g. `_cluster/health`, `_nodes`) and root `GET /` requests may return non-standard responses or 403 depending on data access policies. Health diagnostic routines must gracefully verify collection connectivity via index existence checks (`client.indices.exists(index=...)`) rather than failing on `client.info()` version parsing.
+10. **AOSS Decoupled Security Policies Requirement**:
+    - Before creating indices or indexing documents in OpenSearch Serverless, three separate AWS policies must be provisioned: encryption policy, network policy, and data access policy. If data access policies omit `aoss:CreateCollectionItems` or `aoss:CreateIndex` for the current IAM principal, requests fail with 403 Forbidden. Client errors are logged with diagnostic guidance pointing to AWS AOSS data access policies.
 
 ---
 
@@ -745,11 +771,12 @@ All tests must execute offline using `unittest.mock` and `botocore.stub.Stubber`
   - Verify Bedrock payload structure and extraction of 1024-dim vectors for both `amazon.titan-embed-text-v2:0` and `cohere.embed-multilingual-v3.0`.
   - Verify ThreadPool concurrency and retry logic on `ThrottlingException`.
 - [ ] `tests/test_opensearch_indexer.py`:
-  - Verify dual authentication configuration (SigV4 vs Basic/no-auth).
-  - Verify `ensure_index_exists` executes correct k-NN mapping payload with `content_hash`, `vietnamese_ascii_analyzer`, and `folded` subfields.
-  - Verify `get_existing_hashes` correctly fetches existing hashes.
+  - Verify dual authentication configuration: AWS SigV4 signed with service `"aoss"` for Serverless (or `"es"` for provisioned domain) and fallback to Basic/no-auth.
+  - Verify `ensure_index_exists` executes correct k-NN mapping payload omitting shard/replica settings (compliant with AOSS).
+  - Verify `get_existing_hashes` correctly fetches existing hashes via batch `_mget`.
   - Verify `bulk` index action formatting matches OpenSearch requirements.
-  - Verify `purge_stale_documents` generates accurate delete queries for missing `doc_id`s.
+  - Verify `purge_stale_documents` uses search query + `helpers.bulk(delete)` to purge stale documents without calling `delete_by_query`.
+  - Verify `as_langchain_vectorstore` configures `is_aoss=True` when serverless is enabled.
 - [ ] `tests/test_ingestion_pipeline.py`:
   - Verify CDC: unchanged chunks do not invoke `embedder.embed_chunks`.
   - Verify modified chunks correctly re-embed and update OpenSearch.
@@ -760,7 +787,7 @@ All tests must execute offline using `unittest.mock` and `botocore.stub.Stubber`
 - [ ] `tests/test_api_ingestion.py`:
   - Verify `POST /api/v1/ingestion/chunk/preview` parses chunks from `file_path` and `raw_markdown` without I/O errors.
   - Verify `POST /api/v1/ingestion/embed/text` returns vector dimensions and preview using mocked embedder.
-  - Verify `GET /api/v1/ingestion/index/status` returns index existence, doc count, and mapping health.
+  - Verify `GET /api/v1/ingestion/index/status` returns index existence, doc count, mapping health, and serverless metadata (`is_serverless: true`, `collection_type: "VECTORSEARCH"`).
   - Verify `POST /api/v1/ingestion/index/init` creates or recreates index.
   - Verify `POST /api/v1/ingestion/ingest/file` and `POST /api/v1/ingestion/ingest/batch` trigger pipeline and return summary stats.
   - Verify `POST /api/v1/ingestion/cdc/check-hashes` and `POST /api/v1/ingestion/reconcile`.
@@ -781,17 +808,18 @@ All tests must execute offline using `unittest.mock` and `botocore.stub.Stubber`
 
 1. **Classification Strategy**: Adopted the **Hybrid Approach** (fast rule-based regex/structure parsing for product listing cards; fallback to Bedrock LLM only for unstructured policy text).
 2. **Product Chunk Content**: Formatted as an **Enriched Semantic Template** (`Tên sản phẩm: ... | Danh mục: ... | Giá: ... | Tình trạng: ... | Link: ...`) to maximize embedding similarity against natural shopper inquiries.
-3. **Authentication Strategy**: Implemented **Flexible Dual Auth** (AWS SigV4 by default, with config-driven fallback to Basic Auth / no-auth for local Docker or mock environments).
+3. **Authentication Strategy**: Implemented **Flexible Dual Auth** (AWS SigV4 signed for service `"aoss"` by default in Serverless mode, with config-driven fallback to Basic Auth / no-auth for local Docker or mock environments).
 4. **Bedrock Concurrency**: Orchestrated via **`ThreadPoolExecutor` (5–8 workers)** equipped with `tenacity` exponential jittered backoff.
 5. **Interface Surface**: Adopted **Dual Layer Architecture (Modular Python Core + Scalable FastAPI REST Layer)**. The core domain logic is decoupled in `src/ingestion/`, while a high-performance REST API layer structured under `src/api/v1/` exposes each pipeline stage for fast developer self-testing, OpenAPI/Swagger UI (`/docs`), and microservice integration.
 6. **Change Data Detection (CDC)**: Computes `content_hash` for each chunk to skip re-embedding unchanged documents during recurring crawls. Queries existing hashes via batch `_mget` by document IDs for fast point-lookups without scoring overhead.
 7. **Hybrid Search Readiness**: OpenSearch index configured with dual storage (`knn_vector` for dense semantic search + analyzed `content`/`product_name` for BM25 lexical search), enabling exact SKU and brand name matching at retrieval time.
 8. **Parent-Child Retrieval for Policies**: Embedded chunk maintains high-precision section text while storing `parent_section_content` in metadata for generation context expansion.
-9. **Stale Document Reconciliation Policy**: Explicit manual invocation only (`pipeline.reconcile_orphans(...)` with `enable_reconciliation=False` by default) to protect against accidental mass deletions during partial crawls.
+9. **Stale Document Reconciliation Policy**: Explicit manual invocation only (`pipeline.reconcile_orphans(...)` with `enable_reconciliation=False` by default) to protect against accidental mass deletions during partial crawls. Executed via two-phase query + bulk delete to support OpenSearch Serverless.
 10. **Vietnamese Diacritic & Accent-Resilient Analysis**: Added `vietnamese_ascii_analyzer` with `asciifolding` token filter and multi-field `content.folded` to support natural shopper search patterns with or without tone marks.
 11. **Active Embedding Model**: Standardized on `cohere.embed-multilingual-v3.0` (1024-d, `input_type="search_document"`) as the active default for superior Vietnamese semantic representation, maintaining `amazon.titan-embed-text-v2:0` as a configurable cost-effective alternative.
-12. **LangChain Component Standard**: Integrated `langchain-core` (`Document` conversion on `EcomChunk`), `langchain-aws` (`BedrockEmbeddings`), and `langchain-community` (`OpenSearchVectorSearch`), standardizing vector store interfaces for downstream retrieval and agentic workflows while maintaining CDC custom hashing.
+12. **LangChain Component Standard**: Integrated `langchain-core` (`Document` conversion on `EcomChunk`), `langchain-aws` (`BedrockEmbeddings`), and `langchain-community` (`OpenSearchVectorSearch` with `is_aoss=True`), standardizing vector store interfaces for downstream retrieval and agentic workflows while maintaining CDC custom hashing.
 13. **OpenSearch k-NN Engine Standard**: Selected native `lucene` engine with `cosinesimil` over legacy `nmslib` for memory-efficient HNSW indexing and seamless metadata pre-filtering.
 14. **Dual Chunking Granularity**: Multi-card parser for catalog listing pages, paired with a comprehensive single-item parser for dedicated product detail pages (capturing technical specifications, dimensions, and warranty into `attributes` metadata).
+15. **OpenSearch Serverless (AOSS) Migration**: Migrated vector storage target from a provisioned OpenSearch domain to an Amazon OpenSearch Serverless collection of type `VECTORSEARCH`. Eliminates cluster node sizing, shard capacity management, and manual infrastructure maintenance while retaining full k-NN vector search and Lucene BM25 lexical indexing. Handled all AOSS constraints: SigV4 service scoped to `"aoss"`, elimination of shard settings from index payloads, and adaptation of orphan purging from unsupported `_delete_by_query` to search + bulk delete.
 
 

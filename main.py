@@ -106,6 +106,7 @@ def run_preflight_checks(cfg: Optional[IngestionConfig] = None) -> dict[str, Any
         "bedrock_dimension": cfg.bedrock_dimension,
         "opensearch_target": f"{cfg.opensearch_host}:{cfg.opensearch_port}",
         "opensearch_index": cfg.opensearch_index_name,
+        "opensearch_is_serverless": cfg.opensearch_is_serverless,
         "opensearch_reachable": False,
         "bedrock_configured": bool(cfg.aws_region),
         "errors": [],
@@ -118,11 +119,25 @@ def run_preflight_checks(cfg: Optional[IngestionConfig] = None) -> dict[str, Any
 
         indexer = OpenSearchVectorIndexer()
         if hasattr(indexer, "client") and indexer.client is not None:
-            if indexer.client.ping():
+            reachable = False
+            try:
+                reachable = bool(indexer.client.ping())
+            except Exception:
+                reachable = False
+
+            # On OpenSearch Serverless, root ping (HEAD /) might be restricted; verify via index existence check
+            if not reachable:
+                try:
+                    indexer.client.indices.exists(index=cfg.opensearch_index_name)
+                    reachable = True
+                except Exception:
+                    pass
+
+            if reachable:
                 report["opensearch_reachable"] = True
             else:
                 report["warnings"].append(
-                    f"OpenSearch cluster at {cfg.opensearch_host}:{cfg.opensearch_port} did not respond to ping."
+                    f"OpenSearch endpoint at {cfg.opensearch_host}:{cfg.opensearch_port} did not respond."
                 )
     except Exception as exc:
         report["warnings"].append(
@@ -174,6 +189,8 @@ def print_diagnostics_report(report: dict[str, Any]) -> None:
     os_icon = "✅" if report["opensearch_reachable"] else "⚠️"
     bedrock_icon = "✅" if report["bedrock_configured"] else "❌"
 
+    serverless_label = "OpenSearch Serverless (AOSS)" if report.get("opensearch_is_serverless") else "Managed OpenSearch Domain"
+
     output = f"""
 ================================================================================
   🩺  SALES ASSISTANT — PRE-FLIGHT SYSTEM DIAGNOSTICS
@@ -182,6 +199,7 @@ def print_diagnostics_report(report: dict[str, Any]) -> None:
   AWS Region:         {report['aws_region']}
   Bedrock Model:      {bedrock_icon} {report['bedrock_model']} ({report['bedrock_dimension']}-d)
   OpenSearch Target:  {os_icon} {report['opensearch_target']} (Index: {report['opensearch_index']})
+  OpenSearch Mode:    {serverless_label}
   OpenSearch Online:  {report['opensearch_reachable']}
 """
     if report["warnings"]:

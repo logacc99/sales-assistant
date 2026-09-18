@@ -52,3 +52,17 @@ def test_env_overrides():
         assert cfg.opensearch_use_aws_auth is False
         assert cfg.opensearch_username == "custom_user"
         assert cfg.opensearch_password == "custom_password"
+
+
+def test_serverless_config_defaults():
+    """Verify serverless defaults when an .aoss.amazonaws.com host is specified."""
+    env_vars = {
+        "OPENSEARCH_HOST": "https://xyz123.us-east-1.aoss.amazonaws.com",
+    }
+    with patch.dict(os.environ, env_vars, clear=True):
+        cfg = get_config()
+        assert cfg.opensearch_is_serverless is True
+        assert cfg.opensearch_port == 443
+        assert cfg.opensearch_service_name == "aoss"
+        assert cfg.opensearch_collection_type == "VECTORSEARCH"
+

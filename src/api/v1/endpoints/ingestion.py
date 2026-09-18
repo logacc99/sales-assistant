@@ -214,6 +214,9 @@ def get_index_status(
                 dimension=settings.bedrock_dimension,
                 knn_engine="lucene",
                 vietnamese_analyzer_configured=True,
+                is_serverless=settings.opensearch_is_serverless,
+                collection_type=settings.opensearch_collection_type,
+                auth_mode="aws_sigv4" if settings.opensearch_use_aws_auth else "basic_or_no_auth",
             ),
         )
     except Exception as exc:

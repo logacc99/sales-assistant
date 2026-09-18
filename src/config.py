@@ -36,9 +36,19 @@ def _int_from_env(key: str, default: int) -> int:
         return default
 
 
+def _float_from_env(key: str, default: float) -> float:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    try:
+        return float(val.strip())
+    except ValueError:
+        return default
+
+
 @dataclass
 class IngestionConfig:
-    """Dynamic configuration for ingestion, Bedrock embedding, and OpenSearch indexing."""
+    """Dynamic configuration for ingestion, Bedrock embedding, OpenSearch, and LLM generation."""
 
     # Bedrock embedding configuration
     bedrock_model_id: str = field(
@@ -49,8 +59,29 @@ class IngestionConfig:
     bedrock_dimension: int = field(
         default_factory=lambda: _int_from_env("BEDROCK_EMBEDDING_DIMENSION", 1024)
     )
+    bedrock_rerank_model_id: str = field(
+        default_factory=lambda: os.getenv(
+            "BEDROCK_RERANK_MODEL_ID", "cohere.rerank-v3-5:0"
+        )
+    )
     bedrock_max_workers: int = field(
         default_factory=lambda: _int_from_env("BEDROCK_MAX_WORKERS", 5)
+    )
+
+    # Bedrock LLM generation configuration
+    bedrock_generation_model_id: str = field(
+        default_factory=lambda: os.getenv(
+            "BEDROCK_GENERATION_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+    )
+    bedrock_generation_temperature: float = field(
+        default_factory=lambda: _float_from_env("BEDROCK_GENERATION_TEMPERATURE", 0.1)
+    )
+    bedrock_generation_max_tokens: int = field(
+        default_factory=lambda: _int_from_env("BEDROCK_GENERATION_MAX_TOKENS", 1500)
+    )
+    bedrock_generation_timeout_seconds: int = field(
+        default_factory=lambda: _int_from_env("BEDROCK_GENERATION_TIMEOUT_SECONDS", 30)
     )
 
     # AWS Credentials and Region
@@ -73,8 +104,26 @@ class IngestionConfig:
     opensearch_host: str = field(
         default_factory=lambda: os.getenv("OPENSEARCH_HOST", "localhost")
     )
+    opensearch_is_serverless: bool = field(
+        default_factory=lambda: _bool_from_env(
+            "OPENSEARCH_IS_SERVERLESS",
+            ".aoss.amazonaws.com" in os.getenv("OPENSEARCH_HOST", ""),
+        )
+    )
     opensearch_port: int = field(
-        default_factory=lambda: _int_from_env("OPENSEARCH_PORT", 9200)
+        default_factory=lambda: _int_from_env(
+            "OPENSEARCH_PORT",
+            443 if (".aoss.amazonaws.com" in os.getenv("OPENSEARCH_HOST", "") or _bool_from_env("OPENSEARCH_IS_SERVERLESS", False)) else 9200,
+        )
+    )
+    opensearch_service_name: str = field(
+        default_factory=lambda: os.getenv(
+            "OPENSEARCH_SERVICE_NAME",
+            "aoss" if (".aoss.amazonaws.com" in os.getenv("OPENSEARCH_HOST", "") or _bool_from_env("OPENSEARCH_IS_SERVERLESS", False)) else "es",
+        )
+    )
+    opensearch_collection_type: str = field(
+        default_factory=lambda: os.getenv("OPENSEARCH_COLLECTION_TYPE", "VECTORSEARCH")
     )
     opensearch_index_name: str = field(
         default_factory=lambda: os.getenv("OPENSEARCH_INDEX_NAME", "sales-assistant-catalog")

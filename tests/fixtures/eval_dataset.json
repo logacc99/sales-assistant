@@ -1,0 +1,49 @@
+[
+  {
+    "id": "eval_001",
+    "query": "Bếp nướng gas ngoài trời 4 họng",
+    "query_type": "product_accented",
+    "expected_product_id": "bep-nuong-gas-01",
+    "expected_category": "product",
+    "expected_keywords": ["bếp nướng gas", "4 họng", "ngoài trời"]
+  },
+  {
+    "id": "eval_002",
+    "query": "bep nuong gas ngoai troi",
+    "query_type": "product_unaccented",
+    "expected_product_id": "bep-nuong-gas-01",
+    "expected_category": "product",
+    "expected_keywords": ["bếp nướng", "gas"]
+  },
+  {
+    "id": "eval_003",
+    "query": "BBQ-GAS-01",
+    "query_type": "exact_sku",
+    "expected_product_id": "bep-nuong-gas-01",
+    "expected_category": "product",
+    "expected_keywords": ["BBQ-GAS-01"]
+  },
+  {
+    "id": "eval_004",
+    "query": "chính sách đổi trả hàng và hoàn tiền trong bao lâu",
+    "query_type": "policy_returns",
+    "expected_category": "policy",
+    "expected_policy_type": "returns",
+    "expected_keywords": ["đổi trả", "7 ngày", "hoàn tiền"]
+  },
+  {
+    "id": "eval_005",
+    "query": "chính sách bảo hành bếp gas",
+    "query_type": "policy_warranty",
+    "expected_category": "policy",
+    "expected_policy_type": "warranty",
+    "expected_keywords": ["bảo hành", "12 tháng"]
+  },
+  {
+    "id": "eval_006",
+    "query": "mã giảm giá cho đơn hàng 2 triệu",
+    "query_type": "promotion",
+    "expected_category": "promotion",
+    "expected_keywords": ["mã giảm giá", "khuyến mãi"]
+  }
+]

@@ -24,6 +24,26 @@ from src.api.v1.schemas.ingestion import (
     SearchTestResponse,
 )
 
+from src.api.v1.schemas.retrieval import (
+    ExplainApiResponse,
+    ExplainScoringItem,
+    FilterCriteriaModel,
+    RetrievalHealthResponse,
+    RetrievedChunkModel,
+    SearchApiRequest,
+    SearchApiResponse,
+)
+
+from src.api.v1.schemas.generation import (
+    CartItemModel,
+    CitationModel,
+    GenerateApiRequest,
+    GenerateApiResponse,
+    GenerationConfigModel,
+    ShopperContextModel,
+    TokenUsageModel,
+)
+
 __all__ = [
     "ApiResponse",
     "ErrorResponse",
@@ -50,4 +70,19 @@ __all__ = [
     "SearchTestRequest",
     "SearchTestResponse",
     "SearchResultItem",
+    "FilterCriteriaModel",
+    "SearchApiRequest",
+    "SearchApiResponse",
+    "RetrievedChunkModel",
+    "ExplainApiResponse",
+    "ExplainScoringItem",
+    "RetrievalHealthResponse",
+    "CartItemModel",
+    "CitationModel",
+    "GenerateApiRequest",
+    "GenerateApiResponse",
+    "GenerationConfigModel",
+    "ShopperContextModel",
+    "TokenUsageModel",
 ]
+

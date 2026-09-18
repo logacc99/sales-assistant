@@ -59,6 +59,9 @@ class IndexStatusResponse(BaseModel):
     dimension: int = 1024
     knn_engine: str = "lucene"
     vietnamese_analyzer_configured: bool = True
+    is_serverless: bool = True
+    collection_type: Optional[str] = "VECTORSEARCH"
+    auth_mode: str = "aws_sigv4"
 
 
 class IndexInitRequest(BaseModel):
