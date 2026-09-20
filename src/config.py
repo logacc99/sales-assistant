@@ -59,16 +59,44 @@ class IngestionConfig:
     bedrock_dimension: int = field(
         default_factory=lambda: _int_from_env("BEDROCK_EMBEDDING_DIMENSION", 1024)
     )
+    # Re-ranking Provider Configuration
+    rerank_enabled: bool = field(
+        default_factory=lambda: _bool_from_env("RERANK_ENABLED", True)
+    )
+    rerank_method: str = field(
+        default_factory=lambda: os.getenv("RERANK_METHOD", "local").strip().lower()
+    )
+    local_rerank_model_id: str = field(
+        default_factory=lambda: os.getenv(
+            "LOCAL_RERANK_MODEL_ID", "BAAI/bge-reranker-m3"
+        )
+    )
+    local_rerank_device: str = field(
+        default_factory=lambda: os.getenv("LOCAL_RERANK_DEVICE", "").strip()
+    )
+    local_rerank_batch_size: int = field(
+        default_factory=lambda: _int_from_env("LOCAL_RERANK_BATCH_SIZE", 16)
+    )
     bedrock_rerank_model_id: str = field(
         default_factory=lambda: os.getenv(
             "BEDROCK_RERANK_MODEL_ID", "cohere.rerank-v3-5:0"
+        )
+    )
+    bedrock_rerank_region: str = field(
+        default_factory=lambda: os.getenv(
+            "BEDROCK_RERANK_REGION", os.getenv("AWS_REGION", "ap-northeast-1")
         )
     )
     bedrock_max_workers: int = field(
         default_factory=lambda: _int_from_env("BEDROCK_MAX_WORKERS", 5)
     )
 
-    # Bedrock LLM generation configuration
+    # LLM Generation Provider Configuration
+    llm_method: str = field(
+        default_factory=lambda: os.getenv("LLM_METHOD", "runtime").strip().lower()
+    )
+
+    # Bedrock LLM generation configuration (Runtime / Converse API)
     bedrock_generation_model_id: str = field(
         default_factory=lambda: os.getenv(
             "BEDROCK_GENERATION_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0"
@@ -82,6 +110,27 @@ class IngestionConfig:
     )
     bedrock_generation_timeout_seconds: int = field(
         default_factory=lambda: _int_from_env("BEDROCK_GENERATION_TIMEOUT_SECONDS", 30)
+    )
+
+    # Bedrock Mantle configuration (OpenAI-compatible gateway)
+    bedrock_mantle_api_key: str = field(
+        default_factory=lambda: os.getenv("BEDROCK_MANTLE_API_KEY", "")
+    )
+    bedrock_mantle_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "BEDROCK_MANTLE_BASE_URL",
+            os.getenv("BEDROCK_MANTLE_MODEL_ID", "") if os.getenv("BEDROCK_MANTLE_MODEL_ID", "").startswith("http") else ""
+        )
+    )
+    bedrock_mantle_project_id: str = field(
+        default_factory=lambda: os.getenv("BEDROCK_MANTLE_PROJECT_ID", "default")
+    )
+    bedrock_mantle_model_id: str = field(
+        default_factory=lambda: (
+            "openai.gpt-oss-120b"
+            if os.getenv("BEDROCK_MANTLE_MODEL_ID", "").startswith("http")
+            else os.getenv("BEDROCK_MANTLE_MODEL_ID", "openai.gpt-oss-120b")
+        )
     )
 
     # AWS Credentials and Region

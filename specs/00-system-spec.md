@@ -186,3 +186,45 @@ Upon successful initialization, `main.py` prints a clean diagnostic overview:
 - **AC-2 (Dry-Run Diagnostics)**: `python main.py --check` evaluates environment, OpenSearch client, and Bedrock embedder initialization, reporting exact status.
 - **AC-3 (Live Boot)**: Executing `python main.py` starts the server on specified port, logs the startup banner, and successfully handles `GET /health` responding `{"success": true}` with HTTP 200.
 - **AC-4 (Signal Handling)**: Sending `SIGINT` (Ctrl+C) gracefully halts Uvicorn without traceback leaks.
+
+---
+
+## 7. Master Environment Variable Reference & System Configuration
+
+As a core Spec-Driven Development (SDD) rule, all runtime parameters across every subsystem must be explicitly specified. The following master reference table anchors all variables across `.env`, `.env.example`, and `src/config.py`:
+
+| Subsystem | Variable Name | Type | Default Value | Defining Spec | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Server Runtime** | `APP_HOST` | `str` | `127.0.0.1` | `SPEC-0000` (Sec 6.2) | Bind network interface address for Uvicorn ASGI server. |
+| **Server Runtime** | `APP_PORT` | `int` | `8000` | `SPEC-0000` (Sec 6.2) | TCP port for Uvicorn ASGI server. |
+| **Server Runtime** | `APP_RELOAD` | `bool` | `true` | `SPEC-0000` (Sec 6.2) | Enable hot-reload on file modification (development mode). |
+| **Server Runtime** | `APP_WORKERS` | `int` | `1` | `SPEC-0000` (Sec 6.2) | Worker process count (enforced to 1 when `APP_RELOAD` is true). |
+| **Server Runtime** | `APP_LOG_LEVEL` | `str` | `info` | `SPEC-0000` (Sec 6.2) | Logging verbosity (`debug`, `info`, `warning`, `error`). |
+| **AWS & Auth** | `AWS_REGION` | `str` | `us-east-1` | `SPEC-0002` (Sec 2.4) | Primary AWS region for Bedrock Converse and OpenSearch SigV4 auth. |
+| **AWS & Auth** | `AWS_ACCESS_KEY_ID` | `str` | `None` | `SPEC-0002` (Sec 2.4) | AWS Access Key ID (optional if using IAM Role or SSO). |
+| **AWS & Auth** | `AWS_SECRET_ACCESS_KEY`| `str` | `None` | `SPEC-0002` (Sec 2.4) | AWS Secret Access Key. |
+| **AWS & Auth** | `AWS_SESSION_TOKEN` | `str` | `None` | `SPEC-0002` (Sec 2.4) | AWS Session Token for temporary IAM STS credentials. |
+| **OpenSearch** | `OPENSEARCH_HOST` | `str` | `localhost` | `SPEC-0002` (Sec 2.4) | OpenSearch Serverless collection HTTPS URL or cluster host. |
+| **OpenSearch** | `OPENSEARCH_PORT` | `int` | `443` | `SPEC-0002` (Sec 2.4) | Port (`443` for AOSS Serverless HTTPS; `9200` for local dev). |
+| **OpenSearch** | `OPENSEARCH_INDEX_NAME`| `str` | `sales-assistant-catalog` | `SPEC-0002` (Sec 2.4) | Target OpenSearch k-NN index name. |
+| **OpenSearch** | `OPENSEARCH_IS_SERVERLESS` | `bool` | Auto (`true` for `.aoss.`) | `SPEC-0002` (Sec 2.4) | Enables Serverless behaviors (signing service `aoss`, omits cluster APIs). |
+| **OpenSearch** | `OPENSEARCH_SERVICE_NAME` | `str` | Auto (`aoss` / `es`) | `SPEC-0002` (Sec 2.4) | AWS SigV4 signing service (`aoss` for Serverless, `es` for provisioned). |
+| **OpenSearch** | `OPENSEARCH_COLLECTION_TYPE` | `str` | `VECTORSEARCH` | `SPEC-0002` (Sec 2.4) | OpenSearch Serverless collection type (must be `VECTORSEARCH` for k-NN). |
+| **OpenSearch** | `OPENSEARCH_USE_AWS_AUTH` | `bool` | `true` | `SPEC-0002` (Sec 2.4) | Enables AWS SigV4 request signing with IAM credentials. |
+| **OpenSearch** | `OPENSEARCH_USERNAME` | `str` | `admin` | `SPEC-0002` (Sec 2.4) | Basic auth username (used only when `OPENSEARCH_USE_AWS_AUTH=false`). |
+| **OpenSearch** | `OPENSEARCH_PASSWORD` | `str` | `admin` | `SPEC-0002` (Sec 2.4) | Basic auth password (used only when `OPENSEARCH_USE_AWS_AUTH=false`). |
+| **Ingestion** | `BEDROCK_EMBEDDING_MODEL_ID` | `str` | `cohere.embed-multilingual-v3.0` | `SPEC-0002` (Sec 2.4) | AWS Bedrock embedding model ID. |
+| **Ingestion** | `BEDROCK_EMBEDDING_DIMENSION` | `int` | `1024` | `SPEC-0002` (Sec 2.4) | Embedding vector dimension (must match index mapping). |
+| **Ingestion** | `BEDROCK_MAX_WORKERS` | `int` | `5` | `SPEC-0002` (Sec 2.4) | Thread pool size for parallel document embedding. |
+| **Retrieval** | `BEDROCK_RERANK_MODEL_ID` | `str` | `cohere.rerank-v3-5:0` | `SPEC-0003` (Sec 2.4) | AWS Bedrock model ID for Cohere Rerank v3.5. |
+| **Retrieval** | `BEDROCK_RERANK_REGION` | `str` | `ap-northeast-1` (fallback: `AWS_REGION`) | `SPEC-0003` (Sec 2.4) | Region for Bedrock Rerank API (e.g. `ap-northeast-1`, `us-west-2`). |
+| **Generation** | `LLM_METHOD` | `str` | `runtime` | `SPEC-0004` (Sec 2.3) | Provider routing: `"runtime"` (Converse API) or `"mantle"` (OpenAI gateway). |
+| **Generation** | `BEDROCK_GENERATION_MODEL_ID` | `str` | `anthropic.claude-3-5-sonnet-20240620-v1:0` | `SPEC-0004` (Sec 2.3) | Default model for Bedrock Converse API (`LLM_METHOD=runtime`). |
+| **Generation** | `BEDROCK_GENERATION_TEMPERATURE` | `float` | `0.1` | `SPEC-0004` (Sec 2.3) | Sampling temperature for generation. |
+| **Generation** | `BEDROCK_GENERATION_MAX_TOKENS` | `int` | `1500` | `SPEC-0004` (Sec 2.3) | Maximum token output limit. |
+| **Generation** | `BEDROCK_GENERATION_TIMEOUT_SECONDS` | `int` | `30` | `SPEC-0004` (Sec 2.3) | HTTP read/socket timeout for generation requests. |
+| **Generation (Mantle)** | `BEDROCK_MANTLE_API_KEY` | `str` | `""` | `SPEC-0004` (Sec 2.3) | Bearer token for Bedrock Mantle OpenAI-compatible gateway. |
+| **Generation (Mantle)** | `BEDROCK_MANTLE_BASE_URL` | `str` | `""` | `SPEC-0004` (Sec 2.3) | Mantle endpoint (e.g. `https://bedrock-mantle.ap-southeast-2.api.aws/v1`). |
+| **Generation (Mantle)** | `BEDROCK_MANTLE_PROJECT_ID` | `str` | `default` | `SPEC-0004` (Sec 2.3) | Project ID sent as query parameter (`?project_id=...`). |
+| **Generation (Mantle)** | `BEDROCK_MANTLE_MODEL_ID` | `str` | `openai.gpt-oss-120b` | `SPEC-0004` (Sec 2.3) | Default model identifier for Mantle gateway calls. |
+

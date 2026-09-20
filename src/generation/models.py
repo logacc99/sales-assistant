@@ -96,14 +96,15 @@ class Citation:
 
 @dataclass
 class GenerationConfig:
-    """Inference parameter overrides for AWS Bedrock."""
+    """Inference parameter overrides for LLM generation."""
 
-    model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    model_id: Optional[str] = None  # None = resolve via configured provider default
     temperature: float = 0.1  # Low temperature for strict factual grounding
     top_p: float = 0.9
     max_tokens: int = 1500
     stop_sequences: List[str] = field(default_factory=list)
     system_prompt_override: Optional[str] = None
+    method: Optional[str] = None  # Optional provider override ("runtime" or "mantle")
 
 
 @dataclass

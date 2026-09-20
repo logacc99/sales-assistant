@@ -20,8 +20,8 @@ def test_retrieval_query_defaults():
     assert query.fusion_algorithm == FusionAlgorithm.RRF
     assert query.rrf_k == 60
     assert query.rerank is True
-    assert query.rerank_model_id == "cohere.rerank-v3-5:0"
-    assert query.reranker_type == RerankerType.BEDROCK_COHERE
+    assert query.rerank_model_id == "BAAI/bge-reranker-m3"
+    assert query.reranker_type == RerankerType.LOCAL
     assert query.expand_parent_context is True
     assert query.parent_max_chars == 2000
     # candidate_pool_size = min(max(top_k * 3, 15), 30) -> min(max(15, 15), 30) == 15

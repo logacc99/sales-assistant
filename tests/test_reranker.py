@@ -1,12 +1,20 @@
-"""Unit tests for NoOpReranker and BedrockCohereReranker."""
+"""Unit tests for NoOpReranker, BedrockCohereReranker, LocalBGEReranker, and RerankerFactory."""
 
 import io
 import json
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 import pytest
 
+from src.config import IngestionConfig
 from src.retrieval.models import RetrievedChunk
-from src.retrieval.reranker import BedrockCohereReranker, NoOpReranker
+from src.retrieval.reranker import (
+    BaseReranker,
+    BedrockCohereReranker,
+    LocalBGEReranker,
+    NoOpReranker,
+    RerankerFactory,
+)
 
 
 def _create_chunks():
@@ -89,3 +97,85 @@ def test_bedrock_cohere_reranker_error():
     with pytest.raises(RuntimeError) as exc_info:
         reranker.rerank(query="test", chunks=chunks, top_k=2)
     assert "ThrottlingException" in str(exc_info.value)
+
+
+def test_local_bge_reranker_success():
+    chunks = _create_chunks()
+    mock_model = MagicMock()
+    # Mock model predicts relevance: c1 -> 0.35, c2 -> 0.92
+    mock_model.predict.return_value = [0.35, 0.92]
+
+    reranker = LocalBGEReranker(
+        model_id="BAAI/bge-reranker-m3",
+        model_instance=mock_model,
+        batch_size=16,
+    )
+
+    results = reranker.rerank(query="bếp nướng gas ngoài trời", chunks=chunks, top_k=2)
+
+    assert len(results) == 2
+    assert results[0].chunk_id == "c2"
+    assert results[0].rerank_rank == 1
+    assert pytest.approx(results[0].score, 1e-4) == 0.92
+    assert pytest.approx(results[0].rerank_score, 1e-4) == 0.92
+
+    assert results[1].chunk_id == "c1"
+    assert results[1].rerank_rank == 2
+    assert pytest.approx(results[1].score, 1e-4) == 0.35
+
+    mock_model.predict.assert_called_once()
+    pairs_sent = mock_model.predict.call_args[0][0]
+    assert len(pairs_sent) == 2
+    assert pairs_sent[0] == ["bếp nướng gas ngoài trời", "Bếp nướng củi mini"]
+    assert pairs_sent[1] == ["bếp nướng gas ngoài trời", "Bếp nướng gas cao cấp 4 họng inox 304"]
+
+
+def test_local_bge_reranker_warmup():
+    mock_model = MagicMock()
+    reranker = LocalBGEReranker(model_instance=mock_model)
+    reranker.initialize()
+    mock_model.predict.assert_called_once()
+
+
+def test_local_bge_reranker_empty_chunks():
+    mock_model = MagicMock()
+    reranker = LocalBGEReranker(model_instance=mock_model)
+    assert reranker.rerank(query="test", chunks=[], top_k=5) == []
+    mock_model.predict.assert_not_called()
+
+
+def test_reranker_factory_creation():
+    # 1. Local provider creation
+    local_reranker = RerankerFactory.create("local", model_instance=MagicMock())
+    assert isinstance(local_reranker, LocalBGEReranker)
+
+    # 2. Bedrock provider creation
+    bedrock_reranker = RerankerFactory.create("bedrock", bedrock_client=MagicMock())
+    assert isinstance(bedrock_reranker, BedrockCohereReranker)
+
+    # 3. NoOp provider creation
+    noop_reranker = RerankerFactory.create("noop")
+    assert isinstance(noop_reranker, NoOpReranker)
+
+    # 4. Unknown provider raises ValueError
+    with pytest.raises(ValueError) as exc:
+        RerankerFactory.create("unknown_provider")
+    assert "Unknown rerank method: 'unknown_provider'" in str(exc.value)
+
+
+def test_reranker_factory_from_config():
+    with patch.dict(os.environ, {"RERANK_METHOD": "noop"}, clear=False):
+        cfg = IngestionConfig.from_env()
+        reranker = RerankerFactory.create(app_config=cfg)
+        assert isinstance(reranker, NoOpReranker)
+
+
+def test_reranker_factory_custom_registration():
+    class CustomReranker(BaseReranker):
+        def rerank(self, query, chunks, top_k):
+            return chunks[:top_k]
+
+    RerankerFactory.register_reranker("custom_plugin", CustomReranker)
+    instance = RerankerFactory.create("custom_plugin")
+    assert isinstance(instance, CustomReranker)
+    assert "custom_plugin" in RerankerFactory.get_registered_rerankers()

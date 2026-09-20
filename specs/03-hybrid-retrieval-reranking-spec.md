@@ -59,7 +59,8 @@ class FusionAlgorithm(str, Enum):
 
 class RerankerType(str, Enum):
     """Reranker implementation."""
-    BEDROCK_COHERE = "bedrock_cohere"
+    LOCAL = "local"
+    BEDROCK = "bedrock"
     NOOP = "noop"
 
 
@@ -88,9 +89,9 @@ class RetrievalQuery:
     score_threshold: float = 0.0  # Minimum similarity/fusion score cutoff
     expand_parent_context: bool = True  # If True, replace content with parent_section_content on final top-K hits
     parent_max_chars: int = 2000  # Safety cap for injected parent content
-    rerank: bool = True  # Always-on Bedrock Cohere Rerank by default
-    rerank_model_id: str = "cohere.rerank-v3-5:0"
-    reranker_type: RerankerType = RerankerType.BEDROCK_COHERE
+    rerank: bool = True  # Always-on re-ranking by default
+    rerank_model_id: str = "BAAI/bge-reranker-m3"
+    reranker_type: RerankerType = RerankerType.LOCAL
 
     @property
     def candidate_pool_size(self) -> int:
@@ -187,15 +188,61 @@ Where:
 - $k = 60$ (constant smoothing parameter).
 - $r_m(d)$ is the 1-based rank of chunk $d$ in result set $m$. If document $d$ did not appear in the top candidate pool for modality $m$, its score component for $m$ is $0$.
 
-#### 2.3.4 Always-On Re-ranking via Bedrock Cohere Rerank
-- Model: `cohere.rerank-v3-5:0` invoked via AWS Bedrock Runtime.
-- **Candidate Pool**: The top $N = \min(\max(top\_k \times 3, 15), 30)$ deduplicated candidates from RRF are submitted to Bedrock Cohere Rerank.
-- Reranker receives the query and list of chunk `content` strings.
-- Re-orders the candidate pool by `relevance_score` descending.
+#### 2.3.4 Pluggable Re-ranking Architecture & Strategy
+- **Pluggable Factory**: Re-ranking implements an extensible registry pattern (`RerankerFactory`) with support for multiple execution backends:
+  1. **`local` (Default)**: In-process `BAAI/bge-reranker-m3` using `FlagEmbedding` or `sentence-transformers`. Eliminates AWS Bedrock Cohere quota/throttling errors, requires zero cloud API egress, and provides high-accuracy cross-encoder scoring for multilingual/Vietnamese text.
+  2. **`bedrock`**: Cloud-hosted Bedrock Cohere Rerank (`cohere.rerank-v3-5:0`) via AWS Bedrock Runtime.
+  3. **`noop`**: Pass-through reranker preserving fused OpenSearch order.
+- **Candidate Pool**: The top $N = \min(\max(top\_k \times 3, 15), 30)$ deduplicated candidates from RRF are submitted to the configured reranker.
+- Reranker receives the query and list of chunk `content` strings, scoring candidate pairs and re-ordering the candidate pool by relevance score descending.
+- **Startup Model Warm-up**: When `RERANK_METHOD="local"`, the model is loaded and initialized into memory during application lifespan startup (`main.py` / FastAPI lifespan) rather than deferred to the first incoming search request.
 
 #### 2.3.5 Post-Ranking Parent-Child Policy Expansion
-- **Why Post-Ranking?**: Scoring on the granular chunk ensures Cohere Rerank evaluates the exact clause answering the user's question, preserving token efficiency and high relevance scoring.
+- **Why Post-Ranking?**: Scoring on the granular chunk ensures the reranker evaluates the exact clause answering the user's question, preserving token efficiency and high relevance scoring.
 - **Expansion Rule**: Once the final top-$K$ chunks are selected, any chunk with `category == "policy"` that contains `metadata.parent_section_content` has its `content` replaced by the parent section content, truncated to a maximum of `parent_max_chars` (default 2,000 characters). `is_parent_expanded` is set to `True`.
+
+---
+
+### 2.4 Environment Variables & Dynamic Configuration
+
+The retrieval and re-ranking pipeline dynamically loads configuration parameters from environment variables (or `.env`), ensuring loose coupling across local inference and multi-region Bedrock / OpenSearch Serverless architectures:
+
+| Variable Name | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- |
+| `RERANK_ENABLED` | `bool` | `true` | Master switch to enable (`true`) or bypass/disable (`false`) the re-ranking stage entirely. |
+| `RERANK_METHOD` | `str` | `local` | Active re-ranking provider: `"local"` (BGE-M3), `"bedrock"` (Bedrock Cohere), or `"noop"`. |
+| `LOCAL_RERANK_MODEL_ID` | `str` | `BAAI/bge-reranker-m3` | Hugging Face model repository or local directory path for local BGE reranker. |
+| `LOCAL_RERANK_DEVICE` | `str` | `""` | Inference device for local reranker (`"cuda"`, `"mps"`, `"cpu"`, or empty for auto-detect). |
+| `LOCAL_RERANK_BATCH_SIZE` | `int` | `16` | Batch size for local cross-encoder scoring. |
+| `BEDROCK_RERANK_MODEL_ID` | `str` | `cohere.rerank-v3-5:0` | AWS Bedrock model identifier for Cohere Rerank v3.5 (used when `RERANK_METHOD=bedrock`). |
+| `BEDROCK_RERANK_REGION` | `str` | `ap-northeast-1` (fallback: `AWS_REGION`) | AWS region for Bedrock Cohere Rerank API calls. Required because `cohere.rerank-v3-5:0` is deployed in specific Bedrock regions (e.g. `ap-northeast-1`, `us-west-2`, `us-east-1`) and may not be available in the primary application region (such as `ap-southeast-1`). |
+| `BEDROCK_EMBEDDING_MODEL_ID` | `str` | `cohere.embed-multilingual-v3.0` | Bedrock embedding model ID used to generate query vectors with `input_type="search_query"`. |
+| `BEDROCK_EMBEDDING_DIMENSION` | `int` | `1024` | Vector dimensionality (must match Bedrock model and OpenSearch index mapping). |
+| `OPENSEARCH_HOST` | `str` | `localhost` | OpenSearch Serverless collection HTTPS URL or local hostname. |
+| `OPENSEARCH_PORT` | `int` | `443` | OpenSearch port (`443` for AOSS HTTPS; `9200` for local dev). |
+| `OPENSEARCH_INDEX_NAME` | `str` | `sales-assistant-catalog` | Target OpenSearch k-NN index containing vectorized chunks. |
+| `OPENSEARCH_IS_SERVERLESS` | `bool` | `true` | When `true`, enables AOSS behaviors (signing service `aoss`, omits cluster-level APIs). |
+| `OPENSEARCH_SERVICE_NAME` | `str` | `aoss` | AWS SigV4 signing service (`aoss` for Serverless collections). |
+| `OPENSEARCH_USE_AWS_AUTH` | `bool` | `true` | Enables AWS SigV4 signing using IAM credentials. |
+
+Example `.env` snippet for Retrieval & Re-ranking:
+```bash
+# Re-ranking Master Toggle & Provider Switch
+RERANK_ENABLED=true
+RERANK_METHOD=local
+LOCAL_RERANK_MODEL_ID=BAAI/bge-reranker-m3
+LOCAL_RERANK_BATCH_SIZE=16
+
+# Bedrock Rerank Configuration (Retained for fallback / cloud mode)
+BEDROCK_RERANK_MODEL_ID=cohere.rerank-v3-5:0
+BEDROCK_RERANK_REGION=ap-northeast-1
+
+# Embedding & OpenSearch Target
+BEDROCK_EMBEDDING_MODEL_ID=cohere.embed-multilingual-v3.0
+BEDROCK_EMBEDDING_DIMENSION=1024
+OPENSEARCH_HOST=https://<collection-id>.ap-southeast-1.aoss.amazonaws.com
+OPENSEARCH_INDEX_NAME=sales-assistant-index
+```
 
 ---
 
@@ -205,11 +252,11 @@ Where:
 
 ```
 src/retrieval/
-├── __init__.py                # Package exports (OpenSearchHybridRetriever, RetrievalQuery, etc.)
+├── __init__.py                # Package exports (OpenSearchHybridRetriever, RetrievalQuery, RerankerFactory, etc.)
 ├── models.py                  # Pydantic & dataclass schemas for query, filters, results
 ├── query_builder.py           # OpenSearch DSL generator (BM25, k-NN, _msearch payloads, filters)
 ├── fusion.py                  # Client-side RRF and Min-Max score normalization algorithms
-├── reranker.py                # BaseReranker, BedrockCohereReranker, NoOpReranker
+├── reranker.py                # BaseReranker, BedrockCohereReranker, LocalBGEReranker, NoOpReranker, RerankerFactory
 ├── retriever.py               # BaseRetriever and OpenSearchHybridRetriever core service
 └── service.py                 # High-level RetrievalService orchestrating cache, telemetry, and metrics
 ```
@@ -217,6 +264,59 @@ src/retrieval/
 ### 3.2 Public Python Method Signatures
 
 ```python
+class BaseReranker(ABC):
+    """Abstract interface for chunk re-ranking."""
+
+    @abstractmethod
+    def rerank(self, query: str, chunks: List[RetrievedChunk], top_k: int) -> List[RetrievedChunk]:
+        """Re-scores candidate chunks given search query and returns top_k hits."""
+        pass
+
+
+class LocalBGEReranker(BaseReranker):
+    """In-process BAAI/bge-reranker-m3 cross-encoder using FlagEmbedding / sentence-transformers."""
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        device: Optional[str] = None,
+        batch_size: int = 16,
+        model_instance: Optional[Any] = None,
+    ) -> None:
+        ...
+
+    def rerank(self, query: str, chunks: List[RetrievedChunk], top_k: int) -> List[RetrievedChunk]:
+        """Cross-encoder inference over candidate pairs, sorting by relevance descending."""
+        ...
+
+
+class BedrockCohereReranker(BaseReranker):
+    """AWS Bedrock Cohere Rerank client (cohere.rerank-v3-5:0)."""
+    ...
+
+
+class RerankerFactory:
+    """Factory and registry for pluggable reranker providers."""
+
+    _registry: Dict[str, Type[BaseReranker]] = {
+        "local": LocalBGEReranker,
+        "bedrock": BedrockCohereReranker,
+        "noop": NoOpReranker,
+    }
+
+    @classmethod
+    def register_reranker(cls, name: str, reranker_cls: Type[BaseReranker]) -> None:
+        ...
+
+    @classmethod
+    def create(
+        cls,
+        method: Optional[str] = None,
+        app_config: Optional[IngestionConfig] = None,
+        **kwargs: Any,
+    ) -> BaseReranker:
+        ...
+```
 class BaseRetriever(ABC):
     """Abstract interface for Sales Assistant knowledge retrieval."""
     

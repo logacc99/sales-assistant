@@ -109,6 +109,13 @@ def run_preflight_checks(cfg: Optional[IngestionConfig] = None) -> dict[str, Any
         "opensearch_is_serverless": cfg.opensearch_is_serverless,
         "opensearch_reachable": False,
         "bedrock_configured": bool(cfg.aws_region),
+        "rerank_enabled": cfg.rerank_enabled,
+        "rerank_method": cfg.rerank_method,
+        "rerank_model": (
+            cfg.local_rerank_model_id
+            if cfg.rerank_method == "local"
+            else cfg.bedrock_rerank_model_id
+        ),
         "errors": [],
         "warnings": [],
     }
@@ -172,6 +179,7 @@ def print_startup_banner(host: str, port: int, cfg: IngestionConfig) -> None:
   ReDoc:             http://{host}:{port}/redoc
   OpenSearch Host:   {cfg.opensearch_host}:{cfg.opensearch_port} (Index: {cfg.opensearch_index_name})
   Bedrock Model:     {cfg.bedrock_model_id} ({cfg.bedrock_dimension}-d)
+  Rerank Phase:      {"ENABLED (" + cfg.rerank_method.upper() + ")" if cfg.rerank_enabled else "DISABLED"}
   Active Routes:
     - [GET]  /health
     - [POST] /api/v1/crawler/crawl
@@ -190,6 +198,11 @@ def print_diagnostics_report(report: dict[str, Any]) -> None:
     bedrock_icon = "✅" if report["bedrock_configured"] else "❌"
 
     serverless_label = "OpenSearch Serverless (AOSS)" if report.get("opensearch_is_serverless") else "Managed OpenSearch Domain"
+    rerank_enabled = report.get("rerank_enabled", True)
+    rerank_method = str(report.get("rerank_method", "local")).upper()
+    rerank_model = report.get("rerank_model", "BAAI/bge-reranker-m3")
+    rerank_icon = "✅" if rerank_enabled else "⚪"
+    rerank_display = f"ENABLED ({rerank_method} - {rerank_model})" if rerank_enabled else "DISABLED"
 
     output = f"""
 ================================================================================
@@ -198,6 +211,7 @@ def print_diagnostics_report(report: dict[str, Any]) -> None:
   Overall Health:     {status_icon} {report['status'].upper()}
   AWS Region:         {report['aws_region']}
   Bedrock Model:      {bedrock_icon} {report['bedrock_model']} ({report['bedrock_dimension']}-d)
+  Rerank Phase:       {rerank_icon} {rerank_display}
   OpenSearch Target:  {os_icon} {report['opensearch_target']} (Index: {report['opensearch_index']})
   OpenSearch Mode:    {serverless_label}
   OpenSearch Online:  {report['opensearch_reachable']}

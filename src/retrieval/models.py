@@ -22,8 +22,10 @@ class FusionAlgorithm(str, Enum):
 
 class RerankerType(str, Enum):
     """Reranker implementation type."""
-    BEDROCK_COHERE = "bedrock_cohere"
+    LOCAL = "local"
+    BEDROCK = "bedrock"
     NOOP = "noop"
+    BEDROCK_COHERE = "bedrock"
 
 
 @dataclass
@@ -55,9 +57,9 @@ class RetrievalQuery:
     score_threshold: float = 0.0  # Minimum similarity/fusion score cutoff
     expand_parent_context: bool = True  # If True, replace content with parent_section_content on final top-K hits
     parent_max_chars: int = 2000  # Safety cap for injected parent content
-    rerank: bool = True  # Always-on Bedrock Cohere Rerank by default
-    rerank_model_id: str = "cohere.rerank-v3-5:0"
-    reranker_type: RerankerType = RerankerType.BEDROCK_COHERE
+    rerank: bool = True  # Always-on re-ranking by default
+    rerank_model_id: str = "BAAI/bge-reranker-m3"
+    reranker_type: RerankerType = RerankerType.LOCAL
 
     @property
     def candidate_pool_size(self) -> int:

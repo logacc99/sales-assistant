@@ -48,11 +48,18 @@ def get_pipeline() -> IngestionPipeline:
 
 @lru_cache(maxsize=1)
 def get_reranker():
-    """Provides Bedrock Cohere reranker instance with fallback to NoOp."""
-    from src.retrieval.reranker import BedrockCohereReranker, NoOpReranker
+    """Provides configured re-ranking provider instance via RerankerFactory with fallback to NoOp."""
+    import logging
+    from src.retrieval.reranker import NoOpReranker, RerankerFactory
+    cfg = get_app_settings()
+    if not cfg.rerank_enabled:
+        return NoOpReranker()
     try:
-        return BedrockCohereReranker()
-    except Exception:
+        return RerankerFactory.create(app_config=cfg)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            f"Failed to initialize configured reranker ({exc}); falling back to NoOpReranker."
+        )
         return NoOpReranker()
 
 
@@ -62,10 +69,12 @@ def get_hybrid_retriever():
     from src.retrieval.retriever import OpenSearchHybridRetriever
     indexer = get_indexer()
     client = getattr(indexer, "client", None)
+    cfg = get_app_settings()
     return OpenSearchHybridRetriever(
         client=client,
         embedder=get_embedder(),
         reranker=get_reranker(),
+        rerank_enabled=cfg.rerank_enabled,
     )
 
 

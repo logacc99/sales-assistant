@@ -64,7 +64,7 @@ class CitationExtractor:
 
         if category == "product":
             name = meta.get("name") or meta.get("product_name") or "Sản phẩm"
-            url = meta.get("product_url") or ""
+            url = meta.get("product_url") or meta.get("source_url") or ""
             price = meta.get("price")
             price_display = format_currency_vnd(price)
             stock = meta.get("stock_status") or "in_stock"
@@ -83,7 +83,7 @@ class CitationExtractor:
 
         elif category == "policy":
             title = meta.get("section_title") or "Chính sách cửa hàng"
-            url = meta.get("policy_url") or SUPPORT_URL
+            url = meta.get("policy_url") or meta.get("source_url") or SUPPORT_URL
             return Citation(
                 citation_type=CitationType.POLICY_LINK,
                 title=title,
@@ -109,7 +109,7 @@ class CitationExtractor:
                 else:
                     discount_display = str(discount_val)
 
-            url = meta.get("terms_url") or "/promotions"
+            url = meta.get("terms_url") or meta.get("source_url") or "/promotions"
             return Citation(
                 citation_type=CitationType.PROMO_TERMS,
                 title=f"Mã: {promo_code}",

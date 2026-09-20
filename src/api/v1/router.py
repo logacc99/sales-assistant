@@ -2,9 +2,15 @@
 
 from fastapi import APIRouter
 
-from src.api.v1.endpoints import crawler, generation, ingestion, retrieval
+from src.api.v1.endpoints import chat, crawler, generation, ingestion, retrieval
 
 api_v1_router = APIRouter()
+
+api_v1_router.include_router(
+    chat.router,
+    prefix="/chat",
+    tags=["RAG Chat Assistant"],
+)
 
 api_v1_router.include_router(
     crawler.router,

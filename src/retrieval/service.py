@@ -25,7 +25,7 @@ class RetrievalService:
 
     def search(
         self,
-        query: str,
+        query: str | RetrievalQuery,
         search_type: SearchType = SearchType.HYBRID,
         top_k: int = 5,
         filters: Optional[FilterCriteria] = None,
@@ -35,6 +35,9 @@ class RetrievalService:
         rerank: bool = True,
     ) -> RetrievalResult:
         """Executes search with parameters wrapped into a RetrievalQuery."""
+        if isinstance(query, RetrievalQuery):
+            return self.retriever.retrieve(query)
+
         req = RetrievalQuery(
             query=query,
             search_type=search_type,

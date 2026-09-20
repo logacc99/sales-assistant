@@ -22,7 +22,23 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context for startup and shutdown procedures."""
     cfg = get_config()
-    logger.info(f"Starting Sales Assistant API [Region: {cfg.aws_region}]...")
+    status_label = f"ENABLED ({cfg.rerank_method.upper()})" if cfg.rerank_enabled else "DISABLED"
+    logger.info(
+        f"Starting Sales Assistant API [Region: {cfg.aws_region}, Reranking: {status_label}]..."
+    )
+    # Initialize and pre-warm reranker right when application starts (if enabled)
+    if cfg.rerank_enabled:
+        try:
+            from src.api.dependencies import get_reranker
+            reranker = get_reranker()
+            if hasattr(reranker, "initialize"):
+                reranker.initialize()
+                logger.info("Reranker model successfully initialized on application startup.")
+        except Exception as exc:
+            logger.warning(f"Reranker startup initialization encountered non-fatal issue: {exc}")
+    else:
+        logger.info("Re-ranking phase is DISABLED (RERANK_ENABLED=false). Skipping model pre-warming.")
+
     yield
     logger.info("Shutting down Sales Assistant API...")
 

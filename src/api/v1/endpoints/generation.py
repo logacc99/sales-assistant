@@ -84,6 +84,8 @@ def _map_request_to_domain(payload: GenerateApiRequest):
             config.top_p = payload.config.top_p
         if payload.config.max_tokens is not None:
             config.max_tokens = payload.config.max_tokens
+        if payload.config.method:
+            config.method = payload.config.method
 
     return chunks, shopper_ctx, config
 

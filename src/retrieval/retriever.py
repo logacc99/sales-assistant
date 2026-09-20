@@ -51,10 +51,12 @@ class OpenSearchHybridRetriever(BaseRetriever):
         reranker: Optional[BaseReranker] = None,
         index_name: Optional[str] = None,
         default_top_k: int = 5,
+        rerank_enabled: Optional[bool] = None,
     ) -> None:
         cfg = get_config()
         self.index_name = index_name or cfg.opensearch_index_name
         self.default_top_k = default_top_k
+        self.rerank_enabled = rerank_enabled if rerank_enabled is not None else getattr(cfg, "rerank_enabled", True)
 
         if client is not None:
             self.client = client
@@ -70,10 +72,11 @@ class OpenSearchHybridRetriever(BaseRetriever):
         if reranker is not None:
             self.reranker = reranker
         else:
+            from src.retrieval.reranker import RerankerFactory
             try:
-                self.reranker = BedrockCohereReranker()
+                self.reranker = RerankerFactory.create(app_config=cfg)
             except Exception as exc:
-                logger.warning(f"Could not initialize BedrockCohereReranker ({exc}). Falling back to NoOpReranker.")
+                logger.warning(f"Could not initialize configured reranker ({exc}). Falling back to NoOpReranker.")
                 self.reranker = NoOpReranker()
 
     def _parse_hits(self, hits: List[Dict[str, Any]]) -> List[RetrievedChunk]:
@@ -146,13 +149,15 @@ class OpenSearchHybridRetriever(BaseRetriever):
             raw_hits = resp.get("hits", {}).get("hits", [])
             chunks = self._parse_hits(raw_hits)
 
-            if query.rerank and self.reranker:
+            if query.rerank and self.rerank_enabled and self.reranker and not isinstance(self.reranker, NoOpReranker):
                 try:
                     chunks = self.reranker.rerank(clean_query, chunks, top_k=top_k)
-                    retrieval_mode_used += "_cohere_rerank"
+                    mode_suffix = getattr(self.reranker, "mode_name", "rerank")
+                    retrieval_mode_used += f"_{mode_suffix}"
                 except Exception as exc:
                     degraded = True
-                    degradation_reason = f"Cohere rerank failed: {exc}. Degraded to BM25 order."
+                    r_label = "Cohere rerank" if "cohere" in str(exc).lower() or getattr(self.reranker, "mode_name", "") == "cohere_rerank" else getattr(self.reranker, "mode_name", "Rerank")
+                    degradation_reason = f"{r_label} failed: {exc}. Degraded to BM25 order."
                     chunks = chunks[:top_k]
             else:
                 chunks = chunks[:top_k]
@@ -185,15 +190,17 @@ class OpenSearchHybridRetriever(BaseRetriever):
                 raw_hits = resp.get("hits", {}).get("hits", [])
                 chunks = self._parse_hits(raw_hits)
 
-            if query.rerank and self.reranker:
+            if query.rerank and self.rerank_enabled and self.reranker and not isinstance(self.reranker, NoOpReranker):
                 try:
                     chunks = self.reranker.rerank(clean_query, chunks, top_k=top_k)
-                    retrieval_mode_used += "_cohere_rerank"
+                    mode_suffix = getattr(self.reranker, "mode_name", "rerank")
+                    retrieval_mode_used += f"_{mode_suffix}"
                 except Exception as exc:
                     degraded = True
+                    r_label = "Cohere rerank" if "cohere" in str(exc).lower() or getattr(self.reranker, "mode_name", "") == "cohere_rerank" else getattr(self.reranker, "mode_name", "Rerank")
                     degradation_reason = (
                         f"{degradation_reason}; " if degradation_reason else ""
-                    ) + f"Cohere rerank failed: {exc}. Degraded to vector order."
+                    ) + f"{r_label} failed: {exc}. Degraded to vector order."
                     chunks = chunks[:top_k]
             else:
                 chunks = chunks[:top_k]
@@ -247,16 +254,18 @@ class OpenSearchHybridRetriever(BaseRetriever):
                 # Select candidates for re-ranking
                 candidates_to_rerank = fused_candidates[:candidate_pool_size]
 
-                if query.rerank and self.reranker:
+                if query.rerank and self.rerank_enabled and self.reranker and not isinstance(self.reranker, NoOpReranker):
                     try:
                         chunks = self.reranker.rerank(clean_query, candidates_to_rerank, top_k=top_k)
-                        retrieval_mode_used += "_cohere_rerank"
+                        mode_suffix = getattr(self.reranker, "mode_name", "rerank")
+                        retrieval_mode_used += f"_{mode_suffix}"
                     except Exception as r_exc:
-                        logger.warning(f"Cohere rerank failed: {r_exc}. Falling back to RRF order.")
+                        r_label = "Cohere rerank" if "cohere" in str(r_exc).lower() or getattr(self.reranker, "mode_name", "") == "cohere_rerank" else getattr(self.reranker, "mode_name", "Rerank")
+                        logger.warning(f"{r_label} failed: {r_exc}. Falling back to RRF order.")
                         degraded = True
                         degradation_reason = (
                             f"{degradation_reason}; " if degradation_reason else ""
-                        ) + f"Cohere rerank failed: {r_exc}. Degraded to RRF order."
+                        ) + f"{r_label} failed: {r_exc}. Degraded to RRF order."
                         chunks = candidates_to_rerank[:top_k]
                 else:
                     chunks = candidates_to_rerank[:top_k]

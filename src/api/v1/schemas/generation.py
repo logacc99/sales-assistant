@@ -45,6 +45,9 @@ class GenerationConfigModel(BaseModel):
         default=None, ge=50, le=4096, description="Maximum completion tokens"
     )
     stop_sequences: List[str] = Field(default_factory=list, description="Optional stop tokens")
+    method: Optional[str] = Field(
+        default=None, description="LLM provider method override: 'runtime' or 'mantle'"
+    )
 
 
 class GenerateApiRequest(BaseModel):

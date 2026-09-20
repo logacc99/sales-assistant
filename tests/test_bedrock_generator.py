@@ -206,3 +206,33 @@ def test_generation_service(mock_boto_client, sample_chunk):
     resp = service.generate(query="Test query", chunks=[sample_chunk])
     assert resp.query == "Test query"
     assert len(resp.citations) == 1
+
+
+def test_generator_with_mantle_client(sample_chunk):
+    """Verify GroundedResponseGenerator works seamlessly with BedrockMantleClient."""
+    from types import SimpleNamespace
+    from src.config import IngestionConfig
+    from src.generation.providers.mantle import BedrockMantleClient
+
+    mock_openai = MagicMock()
+    mock_choice = SimpleNamespace(
+        message=SimpleNamespace(content="Dạ chào bạn, Bếp nướng Weber Spirit II [1] hiện có giá 12.500.000 ₫."),
+        finish_reason="stop",
+    )
+    mock_usage = SimpleNamespace(prompt_tokens=80, completion_tokens=35, total_tokens=115)
+    mock_openai.chat.completions.create.return_value = SimpleNamespace(
+        choices=[mock_choice], usage=mock_usage
+    )
+
+    mantle_cfg = IngestionConfig(llm_method="mantle", bedrock_mantle_model_id="openai.gpt-oss-120b")
+    mantle_client = BedrockMantleClient(app_config=mantle_cfg, openai_client=mock_openai)
+    generator = GroundedResponseGenerator(llm_client=mantle_client, app_config=mantle_cfg)
+
+    req = GenerationRequest(query="Giá bếp Weber?", chunks=[sample_chunk])
+    resp = generator.generate(req)
+
+    assert "12.500.000" in resp.answer
+    assert resp.model_id == "openai.gpt-oss-120b"
+    assert len(resp.citations) == 1
+    assert resp.citations[0].citation_type == CitationType.PRODUCT_CTA
+

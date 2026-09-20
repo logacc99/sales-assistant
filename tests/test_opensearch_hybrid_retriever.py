@@ -170,3 +170,34 @@ def test_point_lookups(mock_clients):
 
     promos = retriever.search_promotions(min_spend=1000000.0)
     assert len(promos) == 1
+
+
+def test_rerank_disabled_bypasses_reranking(mock_clients):
+    mock_os, mock_embedder, _ = mock_clients
+    mock_reranker = MagicMock()
+
+    mock_os.msearch.return_value = {
+        "responses": [
+            {"hits": {"hits": [{"_id": "h1", "_score": 10.0, "_source": {"chunk_id": "h1", "content": "Text 1"}}]}},
+            {"hits": {"hits": [{"_id": "h2", "_score": 0.9, "_source": {"chunk_id": "h2", "content": "Text 2"}}]}},
+        ]
+    }
+
+    retriever = OpenSearchHybridRetriever(
+        client=mock_os,
+        embedder=mock_embedder,
+        reranker=mock_reranker,
+        rerank_enabled=False,
+    )
+
+    query = RetrievalQuery(
+        query="bếp nướng gas",
+        search_type=SearchType.HYBRID,
+        top_k=2,
+        rerank=True,
+    )
+    result = retriever.retrieve(query)
+
+    assert result.total_hits == 2
+    mock_reranker.rerank.assert_not_called()
+    assert "_rerank" not in result.retrieval_mode_used

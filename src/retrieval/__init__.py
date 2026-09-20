@@ -11,7 +11,13 @@ from src.retrieval.models import (
     SearchType,
 )
 from src.retrieval.query_builder import OpenSearchQueryBuilder
-from src.retrieval.reranker import BaseReranker, BedrockCohereReranker, NoOpReranker
+from src.retrieval.reranker import (
+    BaseReranker,
+    BedrockCohereReranker,
+    LocalBGEReranker,
+    NoOpReranker,
+    RerankerFactory,
+)
 from src.retrieval.retriever import BaseRetriever, OpenSearchHybridRetriever
 from src.retrieval.service import RetrievalService
 
@@ -24,7 +30,9 @@ __all__ = [
     "LinearCombinationFusion",
     "BaseReranker",
     "BedrockCohereReranker",
+    "LocalBGEReranker",
     "NoOpReranker",
+    "RerankerFactory",
     "RetrievalQuery",
     "RetrievedChunk",
     "RetrievalResult",
