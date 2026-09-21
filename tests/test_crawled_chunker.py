@@ -4,7 +4,7 @@ from pathlib import Path
 from src.ingestion.cleaner import DocumentCleaner
 from src.ingestion.chunker import CrawledMarkdownChunker
 
-SAMPLE_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "website" / "bepbbq.com"
+SAMPLE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def test_frontmatter_extraction():
@@ -39,14 +39,14 @@ def test_non_content_pages_skipped():
     chunker = CrawledMarkdownChunker()
 
     cart_file = SAMPLE_DIR / "crawled_gio-hang_8e004256.md"
-    if cart_file.exists():
-        chunks = chunker.chunk(cart_file)
-        assert len(chunks) == 0
+    assert cart_file.exists()
+    chunks = chunker.chunk(cart_file)
+    assert len(chunks) == 0
 
     account_file = SAMPLE_DIR / "crawled_tai-khoan_dd7cd8c0.md"
-    if account_file.exists():
-        chunks = chunker.chunk(account_file)
-        assert len(chunks) == 0
+    assert account_file.exists()
+    chunks = chunker.chunk(account_file)
+    assert len(chunks) == 0
 
 
 def test_catalog_product_chunking():
@@ -127,3 +127,41 @@ Giới thiệu BepBBQ
         assert chunk.metadata.policy.policy_type == "returns"
         assert chunk.metadata.policy.parent_section_content is not None
         assert "Chính sách: returns" in chunk.content
+
+
+def test_product_detail_chunking(tmp_path):
+    detail_content = """---
+url: "https://bepbbq.com/san-pham/bep-nuong-blackstone-28/"
+title: "Bếp nướng Blackstone Griddle 28 inch"
+crawl_timestamp: "2026-09-15T08:31:49.028518+00:00"
+content_hash: "detail_test_hash_123"
+category: "crawled"
+---
+
+# Bếp nướng Blackstone Griddle 28 inch
+Mã: BS-28-ORIGINAL
+Danh mục: [Bếp nướng BBQ], [Bếp nướng gas]
+Thẻ: [Blackstone], [Griddle]
+
+Giá: 15.500.000 ₫
+
+Mô tả sản phẩm:
+Bếp nướng gas mặt phẳng cao cấp nhập khẩu từ Mỹ. Thiết kế 2 họng đốt độc lập, bề mặt thép cán nguội.
+"""
+    detail_file = tmp_path / "bep-nuong-blackstone-28.md"
+    detail_file.write_text(detail_content, encoding="utf-8")
+
+    chunker = CrawledMarkdownChunker()
+    chunks = chunker.chunk(detail_file)
+
+    assert len(chunks) == 1
+    chunk = chunks[0]
+    assert chunk.metadata.category == "product"
+    assert chunk.metadata.product is not None
+    assert chunk.metadata.product.name == "Bếp nướng Blackstone Griddle 28 inch"
+    assert chunk.metadata.product.price == 15500000.0
+    assert chunk.metadata.product.product_id == "BS-28-ORIGINAL"
+    assert chunk.metadata.product.sku == "BS-28-ORIGINAL"
+    assert "Bếp nướng BBQ" in chunk.metadata.product.categories
+    assert "Blackstone" in chunk.metadata.product.attributes["tags"]
+
