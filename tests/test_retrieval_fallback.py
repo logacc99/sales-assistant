@@ -75,6 +75,7 @@ def test_fallback_when_cohere_rerank_fails():
         client=mock_os,
         embedder=mock_embedder,
         reranker=FailingReranker(),
+        rerank_enabled=True,
     )
 
     query = RetrievalQuery(
