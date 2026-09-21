@@ -1,0 +1,99 @@
+name: CI/CD Pipeline - Sales Assistant
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  id-token: write   # Required for AWS OIDC authentication
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'ap-southeast-1' }}
+  ECR_REPOSITORY: sales-assistant
+  ECS_CLUSTER: sales-assistant-cluster
+  ECS_SERVICE: sales-assistant-service
+  ECS_TASK_DEFINITION: sales-assistant-task
+
+jobs:
+  test:
+    name: Run Unit & Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run Test Suite
+        env:
+          LLM_METHOD: runtime
+          AWS_REGION: ap-southeast-1
+          OPENSEARCH_HOST: https://dummy.aoss.amazonaws.com
+        run: |
+          pytest tests/ -k "not test_live"
+
+  build-and-push:
+    name: Build & Push to Amazon ECR
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # -------------------------------------------------------------------------
+      # UNCOMMENT THIS STEP ONCE YOUR ECS SERVICE & TASK DEFINITION ARE CREATED
+      # -------------------------------------------------------------------------
+      # - name: Download active ECS Task Definition
+      #   run: |
+      #     aws ecs describe-task-definition \
+      #       --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+      #       --query taskDefinition > task-definition.json
+      #
+      # - name: Fill in the new image ID in the ECS task definition
+      #   id: render-task-def
+      #   uses: aws-actions/amazon-ecs-render-task-definition@v1
+      #   with:
+      #     task-definition: task-definition.json
+      #     container-name: sales-assistant
+      #     image: ${{ steps.build-image.outputs.image }}
+      #
+      # - name: Deploy Amazon ECS task definition
+      #   uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      #   with:
+      #     task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+      #     service: ${{ env.ECS_SERVICE }}
+      #     cluster: ${{ env.ECS_CLUSTER }}
+      #     wait-for-service-stability: true
