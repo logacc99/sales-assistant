@@ -16,7 +16,7 @@ env:
   ECR_REPOSITORY: sales-assistant
   ECS_CLUSTER: sales-assistant-cluster
   ECS_SERVICE: sales-assistant-service
-  ECS_TASK_DEFINITION: sales-assistant-task
+  ECS_TASK_DEFINITION: sales-assistant-task-ec2
 
 jobs:
   test:
@@ -49,6 +49,9 @@ jobs:
     name: Build & Push to Amazon ECR
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
