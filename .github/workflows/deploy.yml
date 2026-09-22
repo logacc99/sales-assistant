@@ -56,6 +56,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Verify Secret Value
+        run: |
+          echo "Role ARN secret is set: ${{ secrets.AWS_ROLE_ARN != '' }}"
+          echo "Role starts with: $(echo '${{ secrets.AWS_ROLE_ARN }}' | cut -c 1-15)..."
+
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
