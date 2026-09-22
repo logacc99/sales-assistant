@@ -56,10 +56,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Verify Secret Value
+      - name: Verify Secret & OIDC Claims
         run: |
           echo "Role ARN secret is set: ${{ secrets.AWS_ROLE_ARN != '' }}"
-          echo "Role starts with: $(echo '${{ secrets.AWS_ROLE_ARN }}' | cut -c 1-15)..."
+          echo "Role starts with: $(echo '${{ secrets.AWS_ROLE_ARN }}' | cut -c 1-20)..."
+          echo "Role ends with: ...$(echo '${{ secrets.AWS_ROLE_ARN }}' | rev | cut -c 1-25 | rev)"
+          # Fetch and decode the OIDC JWT token claims
+          ID_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          echo "--- GitHub OIDC Claims ---"
+          echo "$ID_TOKEN" | cut -d'.' -f2 | base64 -d 2>/dev/null | jq '{sub: .sub, aud: .aud, iss: .iss, repository: .repository, ref: .ref}' || true
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
